@@ -5,8 +5,9 @@ import { AREA_PICKS } from '../dashboard/live-page.ts';
 import { summarize } from '../scoring/index.ts';
 import { sortSummary } from '../scoring/live.ts';
 import { inRange, periodRange } from '../scoring/periods.ts';
+import { lineResults } from '../scoring/results.ts';
 import { createApp, type Env } from '../worker/app.ts';
-import { DEFAULT_MOMENT, SAMPLE_LINES, isSampleTime, pacificMs, sampleLineHistory, sampleWorld } from './world.ts';
+import { DEFAULT_MOMENT, SAMPLE_LINES, isSampleTime, pacificMs, sampleLatestNight, sampleLineHistory, sampleNightLines, sampleWorld } from './world.ts';
 
 const TODAY = '2026-10-30'; // a Friday
 const NOW = new Date(`${TODAY}T20:00:00Z`);
@@ -57,7 +58,7 @@ test('local time turns into the right moment on both sides of the clock change',
 
 test('every sample page works with no database at all, and says the numbers are made up', async () => {
   const t = setup();
-  for (const path of ['/sample', '/sample?at=17:35', '/sample/sort/afternoon', '/sample/sort/twilight?at=20:00', '/sample/ps3', '/sample/pd14?period=last-month']) {
+  for (const path of ['/sample', '/sample?at=17:35', '/sample/sort/afternoon', '/sample/sort/twilight?at=20:00', '/sample/ps3', '/sample/pd14?period=last-month', '/sample/results', '/sample/results?sort=twilight&period=last-week']) {
     const res = await t.get(path);
     assert.equal(res.status, 200, path);
     const page = await res.text();
@@ -339,7 +340,36 @@ test('the history chart: the chosen sort against expected, with one drawing per 
   assert.match(page, /stroke-dasharray/);
 });
 
-test('the real live view is not affected: no sample banner, no line links', async () => {
+test('/sample/results opens on the latest finished night, with the real formulas and sample names only', async () => {
+  const page = await setup().text('/sample/results');
+  assert.match(page, /<h1>Afternoon results<\/h1>/);
+  assert.match(page, /Thu, Oct 29 · \d+ of 27 lines/);
+  assert.match(page, /aria-current="page">Latest night</);
+  assert.match(page, /href="\/sample">All areas</);
+  assert.match(page, /href="\/sample\/results\?sort=twilight&amp;period=latest">Twilight</);
+
+  const rows = sampleNightLines(TODAY, 'Afternoon', { from: sampleLatestNight(TODAY), to: sampleLatestNight(TODAY) });
+  const expected = lineResults(rows).map((l) => l.id);
+  assert.ok(expected.length > 20);
+  assert.deepEqual([...page.matchAll(/<tr data-rank="([^"]+)"/g)].map((m) => m[1]), expected);
+  assert.match(page, new RegExp(`href="/sample/${expected[0].toLowerCase()}\\?sort=afternoon"`));
+  for (const m of page.matchAll(/<td class="person">([^<]*)</g)) assert.match(m[1], /^Sample Supervisor \d\d$/);
+  assert.ok(!page.includes('with no name'));
+  assert.match(await setup().text('/sample'), /href="\/sample\/results">Results</);
+});
+
+test("a line's numbers on the results page match its own history page", async () => {
+  const t = setup();
+  const results = await t.text('/sample/results?period=all-time');
+  const row = results.match(/<tr data-rank="PS3"[\s\S]*?<\/tr>/)![0];
+  const history = sampleLineHistory('PS3', TODAY).filter((r) => r.sort === 'Afternoon');
+  const totals = summarize(history.map((r) => ({ hours: r.hours, volume: r.volume, expectedPph: 550 })));
+  assert.match(row, new RegExp(`>${Math.round(totals.volume).toLocaleString('en-US')}<`));
+  assert.match(row, new RegExp(`<strong>${Math.round(totals.pph!).toLocaleString('en-US')}</strong>`));
+  assert.match(await t.text('/sample/ps3'), new RegExp(`<div class="value">${Math.round(totals.pph!).toLocaleString('en-US')}</div>`));
+});
+
+test('the real live view is not affected: no sample banner', async () => {
   const sqlite = openDb(':memory:');
   migrate(sqlite);
   seed(sqlite);

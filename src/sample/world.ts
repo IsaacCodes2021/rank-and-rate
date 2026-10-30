@@ -4,8 +4,10 @@
 // real site would show.
 import type { LiveLine, LiveSort, SortRef } from '../data/live.ts';
 import { pacificOffsetHours } from '../format.ts';
-import { quarterHourSlot, sortStartMs, type Entry } from '../scoring/index.ts';
+import { hours, quarterHourSlot, sortStartMs, volume, type Entry } from '../scoring/index.ts';
 import { lineNumbers, type LineType } from '../scoring/live.ts';
+import { inRange, type DateRange } from '../scoring/periods.ts';
+import type { LineNightRow, NightLine } from '../scoring/results.ts';
 
 const QUARTER_MS = 15 * 60 * 1000;
 const MINUTE_MS = 60 * 1000;
@@ -188,17 +190,6 @@ export function sampleWorld(today: string, at: string, pick?: SampleSort): Sampl
   };
 }
 
-export type LineNightRow = {
-  date: string;
-  sort: string;
-  supervisors: string[];
-  hours: number;
-  volume: number;
-  pph: number | null;
-  effectiveness: number | null;
-  overUnder: number | null;
-};
-
 function weekdaysBefore(today: string, count: number): string[] {
   const out: string[] = [];
   const d = new Date(`${today}T12:00:00Z`);
@@ -210,8 +201,26 @@ function weekdaysBefore(today: string, count: number): string[] {
   return out;
 }
 
+const HISTORY_NIGHTS = 40;
+
+// The newest night the sample has finished, for the results page. Tonight is still running on /sample.
+export const sampleLatestNight = (today: string) => weekdaysBefore(today, 1)[0];
+
+// Every line on one sort over a range of nights, newest first, for the results page (D028).
+export function sampleNightLines(today: string, sort: SampleSort, range: DateRange): NightLine[] {
+  const dates = weekdaysBefore(today, HISTORY_NIGHTS).filter((date) => inRange(date, range));
+  return dates.flatMap((date) =>
+    SAMPLE_LINES.flatMap((line, index) => {
+      const night = fullNight(line, index, date, sort);
+      if (!night) return [];
+      const { entries, supervisors } = asOf(line, night, night.final.atMs);
+      return [{ date, sort, lineId: line.id, type: line.type, group: line.group, expectedPph: line.expectedPph, supervisors, hours: hours(entries), volume: volume(entries) }];
+    }),
+  );
+}
+
 // Eight weeks of finished sorts for one line, newest first. Tonight is left out: it is still running on /sample.
-export function sampleLineHistory(lineId: string, today: string, nights = 40): LineNightRow[] {
+export function sampleLineHistory(lineId: string, today: string, nights = HISTORY_NIGHTS): LineNightRow[] {
   const index = SAMPLE_LINES.findIndex((l) => l.id === lineId);
   if (index < 0) return [];
   const line = SAMPLE_LINES[index];

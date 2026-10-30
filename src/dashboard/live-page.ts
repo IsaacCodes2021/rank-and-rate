@@ -85,6 +85,8 @@ export const DASHBOARD_STYLE = raw(`<style>
   .moments { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 12px; font-size: 14px; color: var(--ink-2); }
   .moments a { padding: 6px 12px; min-height: 36px; border: 1px solid var(--line); border-radius: 999px; background: var(--card); color: var(--ink); font-weight: 600; text-decoration: none; }
   .moments a[aria-current] { background: var(--ink); border-color: var(--ink); color: #fff; }
+  .periods { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 16px; margin: 14px 0 0; }
+  .periods .sorts { margin: 0; }
   .range { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; margin: 0; }
   .range label { margin: 0; font-size: 13px; font-weight: 400; color: var(--ink-2); }
   .range input { width: auto; min-height: 40px; padding: 4px 8px; font-size: 15px; }
@@ -381,16 +383,16 @@ const SCRIPT = raw(`<script>
 
 export type LivePageOptions = {
   above?: unknown; // shown above the panel and left alone by a refresh
-  topLink?: { href: string; text: string };
+  links?: { href: string; text: string }[];
   title?: string;
   eyebrow?: string;
 };
 
-export function livePage(panel: string, { above = '', topLink = { href: '/shift', text: 'Start shift' }, title = 'Live sort', eyebrow = 'Rank and Rate · Live sort' }: LivePageOptions = {}) {
+export function livePage(panel: string, { above = '', links = [{ href: '/results', text: 'Results' }, { href: '/shift', text: 'Start shift' }], title = 'Live sort', eyebrow = 'Rank and Rate · Live sort' }: LivePageOptions = {}) {
   return layout(
     title,
     html`${DASHBOARD_STYLE}<main class="wide">
-<div class="top"><p class="eyebrow">${eyebrow}</p><div class="links"><a class="link" href="${topLink.href}">${topLink.text}</a></div></div>
+<div class="top"><p class="eyebrow">${eyebrow}</p><div class="links">${links.map((l) => html`<a class="link" href="${l.href}">${l.text}</a>`)}</div></div>
 ${above}
 <div id="stale" class="notice" role="status" hidden>Could not refresh. These numbers may be out of date; it will keep trying.</div>
 <div id="panel">${raw(panel)}</div>

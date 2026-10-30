@@ -25,10 +25,15 @@ import {
   type SupervisorInfo,
   type SupervisorLogin,
 } from '../data/supervisor.ts';
+import { pickSort, readPeriod } from '../dashboard/filters.ts';
+import { linePage } from '../dashboard/line-page.ts';
 import { livePage, livePanel } from '../dashboard/live-page.ts';
+import { resultsPage } from '../dashboard/results-page.ts';
 import { loadLiveSort, recentSorts } from '../data/live.ts';
+import { finishedSortDays, findLine, loadNightLines } from '../data/results.ts';
+import { nightRowOf } from '../scoring/results.ts';
 import { lastLines, myShift, myShifts, saveFinals, saveUpdates, setShiftLines, startShift } from '../data/shift.ts';
-import { isSampleSort, sampleLine, sampleOverview } from '../sample/pages.ts';
+import { isSampleSort, sampleLine, sampleOverview, sampleResults } from '../sample/pages.ts';
 import { nightPage, signInPage, supervisorSignInPage, supervisorSignUpPage, supervisorsPage } from '../entry/pages.ts';
 import { finalPage, shiftDonePage, sortsPage, startShiftPage, updatePage } from '../entry/shift-pages.ts';
 
@@ -140,7 +145,8 @@ export function createApp(options: AppOptions = {}) {
     const pickedId = id ?? open[0]?.id ?? finished[0]?.id ?? null;
     const sort = pickedId === null ? null : await loadLiveSort(db, pickedId);
     if (id !== null && !sort) return null;
-    const panel = String(await livePanel({ sort, open, finished, following: id === null, now: at }));
+    const lineHref = (lineId: string) => `/line/${lineId.toLowerCase()}?sort=${sort!.sort.toLowerCase()}`; // a line opens on the sort being looked at
+    const panel = String(await livePanel({ sort, open, finished, following: id === null, now: at, lineHref }));
     if (liveCache.size > 50) liveCache.clear();
     liveCache.set(key, { at: at.getTime(), panel });
     return panel;
@@ -152,6 +158,70 @@ export function createApp(options: AppOptions = {}) {
   };
   app.get('/live', async (c) => liveResponse(c, await livePanelFor(c.env.DB, null)));
   app.get('/live/:id{[0-9]+}', async (c) => liveResponse(c, await livePanelFor(c.env.DB, Number(c.req.param('id')))));
+
+  // The results page and a line's history (D028, D125), open to anyone with the link. They read
+  // only finished sorts, and viewers share a copy for LIVE_CACHE_MS, as on the live view.
+  const pageCache = new Map<string, { at: number; page: string }>();
+  const sharedPage = async (c: Context<{ Bindings: Env }>, make: (today: string) => Promise<string | null>) => {
+    c.header('Cache-Control', 'no-store');
+    const at = now();
+    const cached = pageCache.get(c.req.url);
+    if (cached && at.getTime() - cached.at < LIVE_CACHE_MS) return c.html(cached.page);
+    const page = await make(pacificDate(at));
+    if (page === null) return c.redirect('/results');
+    if (pageCache.size > 100) pageCache.clear();
+    pageCache.set(c.req.url, { at: at.getTime(), page });
+    return c.html(page);
+  };
+  app.get('/results', (c) =>
+    sharedPage(c, async (today) => {
+      const query = c.req.query();
+      const days = await finishedSortDays(c.env.DB);
+      const sorts = days.map((d) => d.sort);
+      const sort = pickSort(sorts, query.sort) ?? 'Afternoon';
+      const { period, range } = readPeriod(today, query, days.find((d) => d.sort === sort)?.latest ?? null);
+      const { rows, activeLines } = sorts.length ? await loadNightLines(c.env.DB, { sort, range }) : { rows: [], activeLines: 0 };
+      return String(
+        await resultsPage({
+          rows,
+          activeLines,
+          sorts,
+          sort,
+          period,
+          range,
+          basePath: '/results',
+          lineHref: (id) => `/line/${id.toLowerCase()}?sort=${sort.toLowerCase()}`,
+          links: [{ href: '/live', text: 'Live sort' }],
+        }),
+      );
+    }),
+  );
+  app.get('/line/:line', (c) =>
+    sharedPage(c, async (today) => {
+      const line = await findLine(c.env.DB, c.req.param('line').toUpperCase());
+      if (!line) return null;
+      const query = c.req.query();
+      const days = await finishedSortDays(c.env.DB, line.id);
+      const sorts = days.length ? days.map((d) => d.sort) : ['Afternoon'];
+      const sort = pickSort(sorts, query.sort) ?? 'Afternoon';
+      const { period, range } = readPeriod(today, query);
+      const { rows } = await loadNightLines(c.env.DB, { sort, range, lineId: line.id });
+      return String(
+        await linePage({
+          line,
+          rows: rows.map(nightRowOf),
+          sort,
+          sorts,
+          period,
+          range,
+          today,
+          basePath: `/line/${line.id.toLowerCase()}`,
+          backHref: '/results',
+          backText: 'Results',
+        }),
+      );
+    }),
+  );
 
   // Made-up numbers to show people the site, on the real screens (D121). None of this touches
   // the database. A page never changes during a day, so each is kept once made.
@@ -173,6 +243,10 @@ export function createApp(options: AppOptions = {}) {
     const sort = c.req.param('sort');
     const today = pacificDate(now());
     return sampleResponse(c, today, async () => (isSampleSort(sort) ? sampleOverview(today, c.req.query('at'), sort) : null));
+  });
+  app.get('/sample/results', (c) => {
+    const today = pacificDate(now());
+    return sampleResponse(c, today, () => sampleResults(today, c.req.query()));
   });
   app.get('/sample/:line', (c) => {
     const today = pacificDate(now());

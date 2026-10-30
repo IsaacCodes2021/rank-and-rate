@@ -1,22 +1,24 @@
 // One line's history on one sort (D125): its totals for a period, its PPH night by night, and a row
 // per night (D028, D072, D105). It takes its rows as plain data, so the same page can later show real nights.
 import { html, raw } from 'hono/html';
-import type { LineNightRow } from '../sample/world.ts';
 import { summarize } from '../scoring/index.ts';
-import { PERIODS, type DateRange, type PeriodKey } from '../scoring/periods.ts';
+import type { DateRange } from '../scoring/periods.ts';
+import type { LineNightRow } from '../scoring/results.ts';
 import { layout } from '../entry/pages.ts';
 import { count, longDay, oneDecimal, shortDay } from '../format.ts';
 import { CHART_SCRIPT, chartLegend, chartPlot, type ChartInput } from './chart.ts';
+import { filterBar, type PeriodChoice } from './filters.ts';
 import { DASHBOARD_STYLE } from './live-page.ts';
 
 const orDash = (n: number | null, show: (v: number) => string = count) => (n === null ? '-' : show(n));
-const overPlan = (hours: number | null) => {
+export const overPlan = (hours: number | null) => {
   if (hours === null) return '-';
   return Math.abs(hours) < 0.05 ? 'on plan' : `${oneDecimal(Math.abs(hours))} ${hours > 0 ? 'over' : 'under'}`;
 };
 
 const STYLE = raw(`<style>
   .swatch.Afternoon { background: #1baf7a; }
+  .swatch.Morning { background: #b45309; }
   .swatch.Twilight { background: #6250d6; }
   .swatch.dash { height: 0; border-radius: 0; background: none; border-top: 2px dashed var(--ink-2); }
   .chart-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 8px 16px; margin-bottom: 8px; }
@@ -30,8 +32,6 @@ const STYLE = raw(`<style>
   .tip b { display: block; margin-bottom: 4px; font-size: 13px; }
   .tip div { display: flex; align-items: center; gap: 6px; color: var(--ink-2); }
   .tip strong { color: var(--ink); font-variant-numeric: tabular-nums; }
-  .periods { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 16px; margin: 14px 0 0; }
-  .periods .sorts { margin: 0; }
   .history { margin-top: 16px; }
   .history .note { margin: 0 0 8px; font-size: 14px; color: var(--ink-2); }
   @media (max-width: 820px) {
@@ -43,7 +43,7 @@ const STYLE = raw(`<style>
   }
 </style>`);
 
-const SORT_COLORS: Record<string, string> = { Afternoon: '#1baf7a', Twilight: '#6250d6' };
+const SORT_COLORS: Record<string, string> = { Afternoon: '#1baf7a', Morning: '#b45309', Twilight: '#6250d6' };
 
 function chartFor(rows: LineNightRow[], sort: string, expectedPph: number): ChartInput | null {
   if (rows.length === 0) return null;
@@ -68,43 +68,28 @@ export type LinePageInput = {
   rows: LineNightRow[]; // already limited to the sort and the period, newest first
   sort: string;
   sorts: readonly string[];
-  period: PeriodKey | 'custom';
+  period: PeriodChoice;
   range: DateRange;
   today: string;
   basePath: string; // where this line's page lives, for the filters
   backHref: string;
+  backText?: string;
   above?: unknown;
 };
 
-export function linePage({ line, rows, sort, sorts, period, range, basePath, backHref, above = '' }: LinePageInput) {
+export function linePage({ line, rows, sort, sorts, period, range, basePath, backHref, backText = 'All areas', above = '' }: LinePageInput) {
   const totals = summarize(rows.map((r) => ({ hours: r.hours, volume: r.volume, expectedPph: line.expectedPph })));
   const input = chartFor(rows, sort, line.expectedPph);
   const kind = line.type === 'PS' ? 'Unload' : `Load, ${line.group}`;
   const title = `${line.id} history`;
 
-  // Each selector keeps what the other one has picked.
-  const sortKey = sort.toLowerCase();
-  const hrefFor = (query: Record<string, string>) => `${basePath}?${new URLSearchParams(query)}`;
-  const periodQuery: Record<string, string> = period === 'custom' ? { ...(range.from ? { from: range.from } : {}), ...(range.to ? { to: range.to } : {}) } : { period };
-  const sortLink = (s: string) => html`<a href="${hrefFor({ sort: s.toLowerCase(), ...periodQuery })}"${s === sort ? raw(' aria-current="true"') : ''}>${s}</a>`;
-  const periodLink = (key: PeriodKey, label: string) => html`<a href="${hrefFor({ sort: sortKey, period: key })}"${period === key ? raw(' aria-current="page"') : ''}>${label}</a>`;
-
   return layout(
     title,
     html`${DASHBOARD_STYLE}${STYLE}<main class="wide">
-<div class="top"><p class="eyebrow">Rank and Rate · Line history</p><div class="links"><a class="link" href="${backHref}">All areas</a></div></div>
+<div class="top"><p class="eyebrow">Rank and Rate · Line history</p><div class="links"><a class="link" href="${backHref}">${backText}</a></div></div>
 ${above}
 <div class="heading"><h1>${line.id}</h1><p class="sub">${kind} · expected ${count(line.expectedPph)} PPH</p></div>
-<nav class="sorts" aria-label="Sort">${sorts.map(sortLink)}</nav>
-<div class="periods">
-<nav class="sorts" aria-label="Period">${PERIODS.map((p) => periodLink(p.key, p.label))}</nav>
-<form class="range" method="get" action="${basePath}">
-<input type="hidden" name="sort" value="${sortKey}">
-<div><label for="from">From</label><input id="from" name="from" type="date" value="${range.from ?? ''}"></div>
-<div><label for="to">To</label><input id="to" name="to" type="date" value="${range.to ?? ''}"></div>
-<button type="submit">Show</button>
-</form>
-</div>
+${filterBar({ basePath, sorts, sort, period, range })}
 ${
   rows.length === 0
     ? html`<div class="card" style="margin-top:16px"><h2>No ${sort} sorts in this period</h2><p class="sub">Try a longer period.</p></div>`

@@ -1,11 +1,12 @@
 // The sample pages (D121): the real screens with made-up numbers, to show people the site and to
 // see how it behaves. Every page says the numbers are made up. Nothing here touches the database.
 import { html, raw } from 'hono/html';
+import { pickSort, readPeriod, type FilterQuery } from '../dashboard/filters.ts';
 import { linePage } from '../dashboard/line-page.ts';
 import { livePage, livePanel } from '../dashboard/live-page.ts';
-import { isRealDate } from '../data/night.ts';
-import { inRange, isPeriodKey, periodRange, type DateRange, type PeriodKey } from '../scoring/periods.ts';
-import { DEFAULT_MOMENT, SAMPLE_LINES, SAMPLE_MOMENTS, SAMPLE_SORTS, isSampleTime, sampleLineHistory, sampleWorld, type SampleSort } from './world.ts';
+import { resultsPage } from '../dashboard/results-page.ts';
+import { inRange } from '../scoring/periods.ts';
+import { DEFAULT_MOMENT, SAMPLE_LINES, SAMPLE_MOMENTS, SAMPLE_SORTS, isSampleTime, sampleLatestNight, sampleLineHistory, sampleNightLines, sampleWorld, type SampleSort } from './world.ts';
 
 const BANNER = raw('<p class="sample-banner" role="note"><strong>Sample data.</strong> These numbers and names are made up, and nothing here is saved.</p>');
 
@@ -31,30 +32,36 @@ export async function sampleOverview(today: string, atQuery: string | undefined,
   const moments = html`<nav class="moments" aria-label="Moment in the night"><span>See the night at:</span>${SAMPLE_MOMENTS.map(
     (m) => html`<a href="/sample?at=${m.at}"${m.at === at ? raw(' aria-current="page"') : ''}>${m.label}</a>`,
   )}</nav>`;
-  return String(await livePage(panel, { above: html`${BANNER}${moments}`, topLink: { href: '/live', text: 'Real site' }, title: 'Sample data', eyebrow: 'Rank and Rate · Sample data' }));
+  return String(await livePage(panel, { above: html`${BANNER}${moments}`, links: [{ href: '/sample/results', text: 'Results' }, { href: '/live', text: 'Real site' }], title: 'Sample data', eyebrow: 'Rank and Rate · Sample data' }));
 }
 
-// Which dates a line's history covers: a custom range if one is given, else a named period, else all time.
-function readRange(today: string, query: { period?: string; from?: string; to?: string }): { period: PeriodKey | 'custom'; range: DateRange; filter: DateRange } {
-  const from = query.from && isRealDate(query.from) ? query.from : null;
-  const to = query.to && isRealDate(query.to) ? query.to : null;
-  if (from || to) {
-    const swapped = from && to && from > to;
-    const range = { from: swapped ? to : from, to: swapped ? from : to };
-    return { period: 'custom', range, filter: range };
-  }
-  const period: PeriodKey = query.period && isPeriodKey(query.period) ? query.period : 'all-time';
-  const filter = periodRange(period, today);
-  return { period, range: filter, filter };
+// /sample/results: the results page with made-up numbers, opening on the latest finished night.
+export async function sampleResults(today: string, query: FilterQuery): Promise<string> {
+  const sort = pickSort(SAMPLE_SORTS, query.sort) as SampleSort;
+  const { period, range } = readPeriod(today, query, sampleLatestNight(today));
+  return String(
+    await resultsPage({
+      rows: sampleNightLines(today, sort, range),
+      activeLines: SAMPLE_LINES.length,
+      sorts: SAMPLE_SORTS,
+      sort,
+      period,
+      range,
+      basePath: '/sample/results',
+      lineHref: (id) => `/sample/${id.toLowerCase()}?sort=${sort.toLowerCase()}`,
+      links: [{ href: '/sample', text: 'All areas' }, { href: '/live', text: 'Real site' }],
+      above: BANNER,
+    }),
+  );
 }
 
 // /sample/ps3: one line's history on one sort, Afternoon unless another is picked (D125). Null for anything that is not one of the 27 lines.
-export async function sampleLine(today: string, path: string, query: { sort?: string; period?: string; from?: string; to?: string }): Promise<string | null> {
+export async function sampleLine(today: string, path: string, query: FilterQuery): Promise<string | null> {
   const line = SAMPLE_LINES.find((l) => l.id === path.toUpperCase());
   if (!line) return null;
-  const { period, range, filter } = readRange(today, query);
-  const sort = SAMPLE_SORTS.find((s) => s.toLowerCase() === query.sort?.toLowerCase()) ?? SAMPLE_SORTS[0];
-  const rows = sampleLineHistory(line.id, today).filter((r) => r.sort === sort && inRange(r.date, filter));
+  const { period, range } = readPeriod(today, query);
+  const sort = pickSort(SAMPLE_SORTS, query.sort) as SampleSort;
+  const rows = sampleLineHistory(line.id, today).filter((r) => r.sort === sort && inRange(r.date, range));
   return String(
     await linePage({
       line,

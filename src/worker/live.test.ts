@@ -67,6 +67,7 @@ test('the live view needs no sign-in and is never cached by the browser', async 
   assert.match(page, /name="viewport"/);
   assert.match(page, /name="robots" content="noindex"/);
   assert.match(page, /href="\/shift"/);
+  assert.match(page, /href="\/results">Results</);
 });
 
 test('with nothing running it says so, and offers to pick up the next sort', async () => {
@@ -267,7 +268,7 @@ test('the live ranking replaces the chart: the top 3 PS and top 3 PD by effectiv
   assert.deepEqual(topIds(page, 'PS'), ['PS2', 'PS3', 'PS1']);
   assert.deepEqual(topIds(page, 'PD'), ['PD1', 'PD6']);
   const first = topOf(page, 'PS');
-  assert.match(first, /<li data-top="PS2"[^>]*><span class="rank">1<\/span><span class="top-line">PS2<\/span><span class="who">Pat Sample<\/span><span class="top-eff">109%<\/span><span class="top-pph">600 PPH<\/span>/);
+  assert.match(first, /<li data-top="PS2"[^>]*><span class="rank">1<\/span><span class="top-line"><a href="\/line\/ps2\?sort=afternoon">PS2<\/a><\/span><span class="who">Pat Sample<\/span><span class="top-eff">109%<\/span><span class="top-pph">600 PPH<\/span>/);
   assert.match(first, /By effectiveness/);
 
   assert.ok(!page.includes('<svg'));
