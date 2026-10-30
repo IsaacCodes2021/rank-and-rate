@@ -33,7 +33,66 @@ const final = (runningVolume: number, totalHours: number | null = null): Entry =
   totalHours,
 });
 
-test('hours: 5 people for 1 hour is 5 hours (D004, D013)', () => {
+const QUARTER_MS = 15 * 60 * 1000;
+const finalAt = (slot: number, runningVolume: number): Entry => ({ ...final(runningVolume), atMs: slot * QUARTER_MS });
+
+test('hours: a skipped quarter hour counts the last headcount (D117)', () => {
+  // 6 people for slots 100, 101, 102 (two of them skipped), then 4 people at 103: 4.5 + 1 = 5.5.
+  assert.equal(hours([interval(100, 6, 100), interval(103, 4, 400)]), 5.5);
+  // The same night with every update sent comes to the same hours.
+  assert.equal(hours([interval(100, 6, 100), interval(101, 6, 200), interval(102, 6, 300), interval(103, 4, 400)]), 5.5);
+});
+
+test('hours: the order of the entries does not matter', () => {
+  assert.equal(hours([interval(103, 4, 400), interval(100, 6, 100)]), 5.5);
+});
+
+test('hours: carried through to the final (the 3,333 PPH example)', () => {
+  // 6 people at 1:15 PM, final at 5:00 PM: 16 quarter hours x 6 x 0.25 = 24 hours.
+  const entries = [interval(100, 6, 1200), finalAt(115, 5000)];
+  assert.equal(hours(entries), 24);
+  assert.equal(round(pph(volume(entries), hours(entries)), 0), 208);
+});
+
+test('hours: while the sort is going they stop at the latest update, where the volume stops too', () => {
+  assert.equal(hours([interval(100, 6, 1200)]), 1.5);
+  assert.equal(hours([interval(100, 6, 1200), final(5000)]), 1.5); // a final with no time adds nothing
+});
+
+test('hours: a final saved before the last update does not cut hours short', () => {
+  assert.equal(hours([interval(100, 4, 100), interval(103, 4, 400), finalAt(101, 400)]), 4);
+});
+
+test('hours: a final with no updates has no hours to carry', () => {
+  assert.equal(hours([finalAt(115, 5000)]), 0);
+});
+
+test('hours: a headcount of zero carries as zero', () => {
+  // 4 people at 100, then nobody at 101 and 102 (one skipped), then 4 at 103: 1 + 0 + 1 = 2.
+  assert.equal(hours([interval(100, 4, 100), interval(101, 0, 100), interval(103, 4, 300)]), 2);
+});
+
+test('hours: a blank headcount is ignored, and the one before it keeps carrying', () => {
+  const blank: Entry = { kind: 'interval', slot: 101, headcount: null, runningVolume: 200, totalHours: null };
+  assert.equal(hours([interval(100, 4, 100), blank, interval(102, 4, 300)]), 3);
+});
+
+test('hours: a headcount carries for at most 6 hours', () => {
+  // One update at slot 100 and a final typed 15 hours later: 25 quarter hours x 6 x 0.25 = 37.5, not 91.5.
+  assert.equal(hours([interval(100, 6, 1200), finalAt(160, 5000)]), 37.5);
+  // Exactly at the limit nothing is cut.
+  assert.equal(hours([interval(100, 6, 1200), finalAt(124, 5000)]), 37.5);
+  // The same limit applies between two updates: 25 x 4 x 0.25 + 1 x 2 x 0.25 = 25.5.
+  assert.equal(hours([interval(100, 4, 100), interval(200, 2, 900)]), 25.5);
+});
+
+test('hours: skipping updates does not change on-time %, which still counts real updates only', () => {
+  const entries = [interval(100, 6, 100), interval(103, 4, 400)];
+  assert.equal(hours(entries), 5.5);
+  assert.equal(onTimePercent(entries, 103), 50); // 2 of 4
+});
+
+test('hours: 5 people for 1 hour is 5 hours (D004, D117)', () => {
   const entries = [interval(100, 5, 100), interval(101, 5, 200), interval(102, 5, 300), interval(103, 5, 400)];
   assert.equal(hours(entries), 5);
 });

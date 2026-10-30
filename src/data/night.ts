@@ -69,16 +69,23 @@ export type SavedTotal = { lineId: string; hours: number; volume: number };
 export async function getNightTotals(db: D1Database, date: string, sort: string): Promise<SavedTotal[]> {
   const rows = await db
     .prepare(
-      `SELECT e.line_id, e.slot, e.kind, e.headcount, e.running_volume, e.total_hours
+      `SELECT e.line_id, e.slot, e.kind, e.headcount, e.running_volume, e.total_hours, e.created_at
          FROM entry e JOIN shift s ON s.id = e.shift_id
         WHERE s.date = ? AND s.sort = ?`,
     )
     .bind(date, sort)
-    .all<{ line_id: string; slot: number | null; kind: Entry['kind']; headcount: number | null; running_volume: number | null; total_hours: number | null }>();
+    .all<{ line_id: string; slot: number | null; kind: Entry['kind']; headcount: number | null; running_volume: number | null; total_hours: number | null; created_at: string }>();
   const byLine = new Map<string, Entry[]>();
   for (const r of rows.results) {
     const list = byLine.get(r.line_id) ?? [];
-    list.push({ kind: r.kind, slot: r.slot, headcount: r.headcount, runningVolume: r.running_volume, totalHours: r.total_hours });
+    list.push({
+      kind: r.kind,
+      slot: r.slot,
+      headcount: r.headcount,
+      runningVolume: r.running_volume,
+      totalHours: r.total_hours,
+      atMs: r.kind === 'final' ? Date.parse(r.created_at) : null,
+    });
     byLine.set(r.line_id, list);
   }
   const out: SavedTotal[] = [];

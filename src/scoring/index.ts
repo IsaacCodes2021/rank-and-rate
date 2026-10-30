@@ -4,12 +4,17 @@
 
 export const BLOCK_HOURS = 0.25;
 
+// How long a headcount carries with no update: 6 hours, longer than a sort. A final typed the
+// next morning then cannot add a night's worth of hours (D117).
+export const MAX_CARRY_QUARTERS = 24;
+
 export type Entry = {
   kind: 'interval' | 'final';
   slot: number | null; // quarter hours since the Unix epoch; null on a final entry
   headcount: number | null;
   runningVolume: number | null;
   totalHours: number | null;
+  atMs?: number | null; // when a final was first saved, which is where its hours end
 };
 
 export type Line = {
@@ -41,14 +46,28 @@ export function round(n: number | null, places = 2): number | null {
   return Math.round((n + Number.EPSILON) * f) / f;
 }
 
-// Sum of headcount x 0.25 per quarter hour, or total_hours when a final entry carries it (D013, D052).
+// Sum of headcount x 0.25 per quarter hour, or total_hours when a final entry carries it (D052).
+// A quarter hour with no update counts the last headcount (D117), so skipping an update cannot
+// make PPH look better. Hours run from the first update through the final, or through the
+// latest update while the sort is still going, which is as far as the volume runs too.
 export function hours(entries: Entry[]): number {
-  const final = entries.find((e) => e.kind === 'final' && isNum(e.totalHours));
-  if (final) return final.totalHours as number;
+  const final = entries.find((e) => e.kind === 'final');
+  if (final && isNum(final.totalHours)) return final.totalHours;
+
+  const updates = entries
+    .filter((e) => e.kind === 'interval' && isNum(e.slot) && isNum(e.headcount))
+    .sort((a, b) => (a.slot as number) - (b.slot as number));
+  if (updates.length === 0) return 0;
+  const lastSlot = updates[updates.length - 1].slot as number;
+  const endSlot = isNum(final?.atMs) ? Math.max(lastSlot, quarterHourSlot(final.atMs)) : lastSlot;
+
   let total = 0;
-  for (const e of entries) {
-    if (e.kind === 'interval' && isNum(e.headcount) && e.headcount > 0) total += e.headcount * BLOCK_HOURS;
-  }
+  updates.forEach((update, i) => {
+    const nextSlot = i + 1 < updates.length ? (updates[i + 1].slot as number) : endSlot + 1;
+    const quarters = Math.min(nextSlot - (update.slot as number), 1 + MAX_CARRY_QUARTERS);
+    const headcount = update.headcount as number;
+    if (headcount > 0) total += headcount * BLOCK_HOURS * quarters;
+  });
   return total;
 }
 

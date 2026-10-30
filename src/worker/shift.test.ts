@@ -218,7 +218,8 @@ test('sorts never mix: one takes its finals while the next takes its first updat
   // Each sort's totals are its own: hours, volume and PPH take nothing from the other.
   const admin = await t.admin();
   const night1 = await (await t.get('/api/admin/night?date=2026-10-30&sort=Afternoon', admin)).json();
-  assert.deepEqual(night1, { ok: true, rows: [{ lineId: 'PS1', hours: 2, volume: 5000 }, { lineId: 'PS2', hours: 1, volume: 900 }] });
+  // 13:15 through 18:15 is 21 quarter hours: 8 x 0.25 x 21 = 42, and 4 x 0.25 x 21 = 21.
+  assert.deepEqual(night1, { ok: true, rows: [{ lineId: 'PS1', hours: 42, volume: 5000 }, { lineId: 'PS2', hours: 21, volume: 900 }] });
   const page = await t.page(`/shift/${twilight}`, night);
   assert.match(page, /Last: 3 people · 200 pieces at 6:15 PM · 267 PPH/); // 200 / 0.75 hours
   assert.ok(!page.includes('5,000'));
@@ -415,7 +416,65 @@ test("a final carries no hours; they come from the updates, for the admin's scre
   ]);
   const admin = await t.admin();
   const night = await (await t.get('/api/admin/night?date=2026-10-30&sort=Afternoon', admin)).json();
-  assert.deepEqual(night, { ok: true, rows: [{ lineId: 'PS1', hours: 4, volume: 2000 }] });
+  assert.deepEqual(night, { ok: true, rows: [{ lineId: 'PS1', hours: 32, volume: 2000 }] }); // 16 quarter hours x 8 x 0.25
+});
+
+test('a skipped update keeps its hours, so skipping cannot raise PPH (D117)', async () => {
+  const t = await setup();
+  const me = await t.join();
+  const id = await t.start(me, 'Afternoon', ['PS1']);
+  t.setNow(at('13:15'));
+  await t.update(me, id, [{ lineId: 'PS1', headcount: 6, volume: 1200 }]);
+
+  // While the sort is going, hours and volume both stop at the latest update.
+  t.setNow(at('15:00'));
+  assert.match(await t.page(`/shift/${id}`, me), /Last: 6 people · 1,200 pieces at 1:15 PM · 800 PPH/); // 1,200 / 1.5
+
+  // Worked numbers: 1:15 through 5:00 is 16 quarter hours; 6 x 0.25 x 16 = 24 hours; 5,000 / 24 = 208 PPH.
+  t.setNow(at('17:00'));
+  await t.final(me, id, [{ lineId: 'PS1', volume: 5000 }]);
+  assert.match(await t.page(`/shift/${id}`, me), /<td class="line">PS1<\/td><td>24<\/td><td>5,000<\/td><td>208<\/td>/);
+  assert.equal(t.count('SELECT count(*) AS n FROM entry WHERE kind = \'interval\''), 1); // nothing is stored for the skipped ones
+});
+
+test('a later headcount takes over from where it was entered', async () => {
+  const t = await setup();
+  const me = await t.join();
+  const id = await t.start(me, 'Afternoon', ['PS1']);
+  t.setNow(at('13:15'));
+  await t.update(me, id, [{ lineId: 'PS1', headcount: 6, volume: 500 }]);
+  t.setNow(at('14:00')); // 13:30 and 13:45 were skipped: 6 x 0.25 x 3 = 4.5, then 2 x 0.25 = 0.5
+  await t.update(me, id, [{ lineId: 'PS1', headcount: 2, volume: 2500 }]);
+  assert.match(await t.page(`/shift/${id}`, me), /Last: 2 people · 2,500 pieces at 2:00 PM · 500 PPH/); // 2,500 / 5
+});
+
+test('correcting a final later does not add hours', async () => {
+  const t = await setup();
+  const me = await t.join();
+  const id = await t.start(me, 'Afternoon', ['PS1']);
+  t.setNow(at('13:15'));
+  await t.update(me, id, [{ lineId: 'PS1', headcount: 8, volume: 400 }]);
+  t.setNow(at('17:00'));
+  await t.final(me, id, [{ lineId: 'PS1', volume: 2000 }]);
+  t.setNow(at('19:00'));
+  await t.final(me, id, [{ lineId: 'PS1', volume: 2100 }]);
+  assert.equal(t.one("SELECT created_at FROM entry WHERE kind = 'final'").created_at, at('17:00').toISOString());
+  assert.match(await t.page(`/shift/${id}`, me), /<td>32<\/td><td>2,100<\/td>/); // still 16 quarter hours
+});
+
+test("a supervisor's final over the admin's total runs its hours to the supervisor's final", async () => {
+  const t = await setup();
+  const me = await t.join();
+  const admin = await t.admin();
+  const id = await t.start(me, 'Afternoon', ['PS1']);
+  t.setNow(at('15:00'));
+  await t.update(me, id, [{ lineId: 'PS1', headcount: 4, volume: 300 }]);
+  t.setNow(at('16:00'));
+  await t.post('/api/admin/night', { date: '2026-10-30', sort: 'Afternoon', rows: [{ lineId: 'PS1', hours: 10, volume: 2000 }] }, admin);
+  t.setNow(at('17:00'));
+  await t.final(me, id, [{ lineId: 'PS1', volume: 900 }]);
+  assert.deepEqual(t.one("SELECT total_hours, created_at FROM entry WHERE kind = 'final'"), { total_hours: null, created_at: at('17:00').toISOString() });
+  assert.match(await t.page(`/shift/${id}`, me), /<td>9<\/td><td>900<\/td><td>100<\/td>/); // 3:00 through 5:00 is 9 quarters x 4 x 0.25
 });
 
 test('with every final in, the supervisor sees a summary and can still correct a final', async () => {
@@ -427,11 +486,11 @@ test('with every final in, the supervisor sees a summary and can still correct a
   t.setNow(at('17:00'));
   await t.final(me, id, [{ lineId: 'PS1', volume: 2000 }]);
 
-  // Worked numbers: 8 x 0.25 = 2 hours; 2,000 / 2 = 1,000 PPH.
+  // Worked numbers: 1:15 through 5:00 is 16 quarter hours; 8 x 0.25 x 16 = 32 hours; 2,000 / 32 = 63 PPH.
   const page = await t.page(`/shift/${id}`, me);
   assert.match(page, /<h1>Afternoon: check your numbers<\/h1>/);
   assert.match(page, /id="looks-right"[^>]*>Looks right, sign out</);
-  assert.match(page, /<td class="line">PS1<\/td><td>2<\/td><td>2,000<\/td><td>1,000<\/td>/);
+  assert.match(page, /<td class="line">PS1<\/td><td>32<\/td><td>2,000<\/td><td>63<\/td>/);
   assert.match(page, /href="\/shift\/start"/);
   assert.match(await t.page(`/shift/${id}/final`, me), /aria-label="PS1 final volume"[^>]*value="2000"/);
 

@@ -77,6 +77,7 @@ async function linesOf(db: D1Database, shiftId: number, supervisorId: number): P
       headcount: r.headcount,
       runningVolume: r.running_volume,
       totalHours: r.total_hours,
+      atMs: r.kind === 'final' ? Date.parse(r.created_at as string) : null,
     }));
     const intervals = stored.filter((r) => r.kind === 'interval');
     const last = intervals[intervals.length - 1] ?? null; // sorted by slot above
@@ -327,6 +328,7 @@ export type FinalRow = { lineId: string; volume: unknown };
 
 // The end-of-night volume per line on one sort. Hours come from the quarter-hour updates, so a
 // final here carries none; it replaces any total saved before for that line, and the audit log keeps it.
+// Correcting a final keeps its first time, so fixing a typo later does not add hours (D117).
 export async function saveFinals(db: D1Database, who: SupervisorInfo, shiftId: number, rows: FinalRow[], now: Date = new Date()): Promise<{ saved: number; skipped: number }> {
   const shift = await requireShift(db, who, shiftId, now);
   const mine = new Map(shift.lines.map((l) => [l.lineId, l]));
@@ -360,7 +362,8 @@ export async function saveFinals(db: D1Database, who: SupervisorInfo, shiftId: n
            VALUES (?, ?, ?, NULL, 'final', ?, NULL, ?)
            ON CONFLICT (shift_id, line_id) WHERE kind = 'final'
            DO UPDATE SET supervisor_id = excluded.supervisor_id, running_volume = excluded.running_volume,
-                         total_hours = NULL, created_at = excluded.created_at`,
+                         total_hours = NULL,
+                         created_at = CASE WHEN entry.total_hours IS NULL THEN entry.created_at ELSE excluded.created_at END`,
         )
         .bind(shift.id, line.lineId, who.id, volume, at),
       audit(

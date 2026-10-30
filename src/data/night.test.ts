@@ -199,11 +199,12 @@ test('a saved night reads back for correcting, including hours worked out from 1
   const { sqlite, db } = setup();
   await saveNightTotals(db, { ...base, rows: rowsOf(sqlite, (id) => (id === 'PS1' ? { hours: 12.5, volume: 6800 } : {})) }, NOW);
   // PD1 ran the phone flow: four quarter hours of 4 people, then a final update with no total hours
+  const firstSlot = Date.parse('2026-10-26T20:15:00Z') / (15 * 60 * 1000);
   for (let k = 0; k < 4; k += 1) {
     sqlite.exec(`INSERT INTO entry (shift_id, line_id, slot, kind, headcount, running_volume, created_at)
-                 VALUES (1, 'PD1', ${1000 + k}, 'interval', 4, ${100 * (k + 1)}, '2026-10-26T20:15:00Z')`);
+                 VALUES (1, 'PD1', ${firstSlot + k}, 'interval', 4, ${100 * (k + 1)}, '2026-10-26T20:15:00Z')`);
   }
-  sqlite.exec(`INSERT INTO entry (shift_id, line_id, kind, running_volume, created_at) VALUES (1, 'PD1', 'final', 450, '2026-10-26T21:20:00Z')`);
+  sqlite.exec(`INSERT INTO entry (shift_id, line_id, kind, running_volume, created_at) VALUES (1, 'PD1', 'final', 450, '2026-10-26T21:05:00Z')`);
 
   assert.deepEqual(await getNightTotals(db, '2026-10-26', 'Afternoon'), [
     { lineId: 'PD1', hours: 4, volume: 450 },
