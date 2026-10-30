@@ -1,0 +1,30 @@
+{
+  "name": "rank-and-rate",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "node --disable-warning=ExperimentalWarning --test \"src/**/*.test.ts\" \"db/**/*.test.ts\" \"scripts/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit",
+    "secret-scan": "node scripts/secret-scan.ts",
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "dev:db": "wrangler d1 migrations apply rank-and-rate --local && wrangler d1 execute rank-and-rate --local --file=db/seed.sql",
+    "db:init": "node --disable-warning=ExperimentalWarning scripts/db.ts init",
+    "db:seed": "node --disable-warning=ExperimentalWarning scripts/db.ts seed",
+    "db:fake": "node --disable-warning=ExperimentalWarning scripts/db.ts fake",
+    "db:reset": "node --disable-warning=ExperimentalWarning scripts/db.ts reset"
+  },
+  "dependencies": {
+    "hono": "^4.13.14"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261029.1",
+    "@types/node": "^26.6.6",
+    "typescript": "^7.0.2",
+    "wrangler": "^4.156.0"
+  }
+}
