@@ -62,7 +62,7 @@ export function fakeNights(db: DatabaseSync, opts: FakeOptions): { shifts: numbe
 
   const insSup = db.prepare('INSERT OR IGNORE INTO supervisor (full_name, pin_hash, role) VALUES (?, ?, ?)');
   for (let i = 1; i <= SAMPLE_SUPERVISORS; i += 1) {
-    insSup.run(`Sample Supervisor ${String(i).padStart(2, '0')}`, 'fake-not-a-real-hash', i <= 4 ? 'full_time' : 'part_time');
+    insSup.run(`Sample Supervisor ${String(i).padStart(2, '0')}`, `fake-not-a-real-hash-${i}`, i <= 4 ? 'full_time' : 'part_time');
   }
   const sups = db
     .prepare("SELECT id FROM supervisor WHERE full_name LIKE 'Sample Supervisor %' ORDER BY full_name")

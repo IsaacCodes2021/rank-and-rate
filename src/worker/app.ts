@@ -4,6 +4,7 @@ import { createMiddleware } from 'hono/factory';
 import { secureHeaders } from 'hono/secure-headers';
 import { FAILURE_DELAY_MS, isLocked, recordFailure } from '../auth/limits.ts';
 import { SESSION_SECONDS, readSession, sameSecret, signSession } from '../auth/session.ts';
+import { hashPin, isValidPin, newSessionToken, sessionIdOf } from '../auth/supervisor.ts';
 import {
   ValidationError,
   getNightTotals,
@@ -13,12 +14,22 @@ import {
   saveNightTotals,
   type NightRow,
 } from '../data/night.ts';
-import { nightPage, signInPage } from '../entry/pages.ts';
+import {
+  addSupervisor,
+  endSession,
+  findActiveSupervisor,
+  getSessionSupervisor,
+  listSupervisors,
+  normalizeName,
+  startSession,
+} from '../data/supervisor.ts';
+import { nightPage, signInPage, supervisorHomePage, supervisorSignInPage, supervisorsPage } from '../entry/pages.ts';
 
 export type Env = {
   DB: D1Database;
   ADMIN_CODE?: string; // Cloudflare secret (D058, D109)
   SESSION_SECRET?: string; // Cloudflare secret that signs the session cookie
+  PIN_SALT?: string; // Cloudflare secret that keys the hash of supervisor ID numbers (D058, D111)
 };
 
 export type AppOptions = {
@@ -27,8 +38,11 @@ export type AppOptions = {
 };
 
 export const ADMIN_COOKIE = 'rr_admin';
+export const SUPERVISOR_COOKIE = 'rr_supervisor';
 const MIN_ADMIN_CODE = 4; // D109: short on purpose; the lockout in D107 limits guessing
 const MIN_SESSION_SECRET = 32;
+const MIN_PIN_SALT = 32;
+const WRONG_SIGN_IN = 'That name and ID number do not match.'; // the same whichever one was wrong
 
 const PAGE = `<!doctype html>
 <html lang="en">
@@ -82,10 +96,12 @@ export function createApp(options: AppOptions = {}) {
     }
     await next();
   });
-  app.use('/api/admin/*', async (c, next) => {
+  const noStore = createMiddleware(async (c, next) => {
     await next();
     c.header('Cache-Control', 'no-store');
   });
+  app.use('/api/admin/*', noStore);
+  app.use('/api/supervisor/*', noStore);
 
   const isAdmin = async (c: Context<{ Bindings: Env }>) => {
     const secret = c.env.SESSION_SECRET;
@@ -97,6 +113,11 @@ export function createApp(options: AppOptions = {}) {
     if (!(await isAdmin(c))) return c.json({ ok: false, error: 'Sign in as admin first.' }, 401);
     await next();
   });
+
+  const supervisorOf = async (c: Context<{ Bindings: Env }>) => {
+    const token = getCookie(c, SUPERVISOR_COOKIE);
+    return token ? getSessionSupervisor(c.env.DB, await sessionIdOf(token), now()) : null;
+  };
 
   app.get('/', (c) => c.html(PAGE));
 
@@ -181,6 +202,89 @@ export function createApp(options: AppOptions = {}) {
       if (err instanceof ValidationError) return c.json({ ok: false, errors: err.errors }, 400);
       throw err;
     }
+  });
+
+  // The admin adds supervisors here. Changing or removing them comes with the admin screens (M4).
+  app.get('/admin/supervisors', async (c) => {
+    c.header('Cache-Control', 'no-store');
+    if (!(await isAdmin(c))) return c.redirect('/admin');
+    return c.html(supervisorsPage({ supervisors: await listSupervisors(c.env.DB) }));
+  });
+
+  app.post('/api/admin/supervisors', requireAdmin, async (c) => {
+    const salt = c.env.PIN_SALT;
+    if (!salt || salt.length < MIN_PIN_SALT) {
+      return c.json({ ok: false, errors: [{ lineId: null, message: 'Supervisor sign-in is not set up yet.' }] }, 503);
+    }
+    const body = await c.req.json<{ name?: unknown; pin?: unknown; role?: unknown }>().catch(() => null);
+    const pin = typeof body?.pin === 'string' ? body.pin.trim() : '';
+    if (!isValidPin(pin)) {
+      return c.json({ ok: false, errors: [{ lineId: null, message: 'The ID number must be 4 to 12 digits.' }] }, 400);
+    }
+    try {
+      await addSupervisor(
+        c.env.DB,
+        {
+          name: typeof body?.name === 'string' ? body.name : '',
+          role: typeof body?.role === 'string' ? body.role : '',
+          pinHash: await hashPin(pin, salt),
+          actor: 'admin',
+        },
+        now(),
+      );
+      return c.json({ ok: true });
+    } catch (err) {
+      if (err instanceof ValidationError) return c.json({ ok: false, errors: err.errors }, 400);
+      throw err;
+    }
+  });
+
+  // Supervisor sign-in: full name and ID number once, then signed in for 12 hours (D083, D111).
+  app.get('/sign-in', async (c) => {
+    c.header('Cache-Control', 'no-store');
+    const supervisor = await supervisorOf(c);
+    return c.html(supervisor ? supervisorHomePage({ name: supervisor.name }) : supervisorSignInPage());
+  });
+
+  app.post('/api/supervisor/sign-in', async (c) => {
+    const salt = c.env.PIN_SALT;
+    if (!salt || salt.length < MIN_PIN_SALT) return c.json({ ok: false, error: 'Supervisor sign-in is not set up yet.' }, 503);
+    const body = await c.req.json<{ name?: unknown; pin?: unknown }>().catch(() => null);
+    const name = normalizeName(typeof body?.name === 'string' ? body.name : '');
+    const pin = typeof body?.pin === 'string' ? body.pin.trim() : '';
+    const at = now();
+
+    // Failures count by the supervisor's row id, so a typed number is never stored (D111).
+    const supervisor = await findActiveSupervisor(c.env.DB, name);
+    const who = supervisor ? `supervisor:${supervisor.id}` : null;
+    if (who && (await isLocked(c.env.DB, who, at))) {
+      return c.json({ ok: false, error: 'Too many wrong tries. Try again in 15 minutes.' }, 429);
+    }
+    const right = supervisor !== null && isValidPin(pin) && (await sameSecret(await hashPin(pin, salt), supervisor.pin_hash));
+    if (!right) {
+      if (who) await recordFailure(c.env.DB, who, at);
+      await sleep(failureDelayMs);
+      return c.json({ ok: false, error: WRONG_SIGN_IN }, 401);
+    }
+
+    const token = newSessionToken();
+    const expiresAt = new Date(at.getTime() + SESSION_SECONDS * 1000);
+    await startSession(c.env.DB, await sessionIdOf(token), supervisor, expiresAt, at);
+    setCookie(c, SUPERVISOR_COOKIE, token, { httpOnly: true, secure: true, sameSite: 'Strict', path: '/', maxAge: SESSION_SECONDS });
+    return c.json({ ok: true, expiresAt: expiresAt.toISOString() });
+  });
+
+  app.post('/api/supervisor/sign-out', async (c) => {
+    const token = getCookie(c, SUPERVISOR_COOKIE);
+    if (token) await endSession(c.env.DB, await sessionIdOf(token));
+    deleteCookie(c, SUPERVISOR_COOKIE, { path: '/', secure: true });
+    return c.json({ ok: true });
+  });
+
+  app.get('/api/supervisor/me', async (c) => {
+    const supervisor = await supervisorOf(c);
+    if (!supervisor) return c.json({ ok: false, error: 'Sign in first.' }, 401);
+    return c.json({ ok: true, name: supervisor.name, role: supervisor.role });
   });
 
   return app;

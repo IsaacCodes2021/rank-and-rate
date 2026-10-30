@@ -1,8 +1,10 @@
-// The admin's phone screens: sign-in, and the end-of-night totals screen (D065).
-// Plain server-rendered HTML with a small script, so the page stays tiny and needs no
-// build step (D110). Large text and tap targets, number keypads, no sideways scrolling.
+// The phone screens: admin sign-in, the end-of-night totals screen (D065), adding supervisors,
+// and supervisor sign-in (D111). Plain server-rendered HTML with a small script, so the page
+// stays tiny and needs no build step (D110). Large text and tap targets, number keypads, no
+// sideways scrolling.
 import { html, raw } from 'hono/html';
 import { SORTS, type LineInfo } from '../data/night.ts';
+import { ROLES, type Role, type SupervisorInfo } from '../data/supervisor.ts';
 
 const STYLE = raw(`<style>
   * { box-sizing: border-box; }
@@ -31,6 +33,7 @@ const STYLE = raw(`<style>
   .msg.err { background: #fff5f5; border: 2px solid #b00020; }
   .msg.info { background: #eef3fb; border: 2px solid #0a58ca; }
   .link { background: none; color: #0a58ca; padding: 0 4px; min-height: 44px; text-decoration: underline; font-weight: 400; }
+  .links { display: flex; gap: 8px; align-items: baseline; white-space: nowrap; }
 </style>`);
 
 function layout(title: string, body: unknown) {
@@ -223,7 +226,7 @@ export function nightPage({ lines, today }: { lines: LineInfo[]; today: string }
   return layout(
     'Night totals',
     html`<main>
-<div class="top"><h1>Night totals</h1><button type="button" class="link" id="sign-out">Sign out</button></div>
+<div class="top"><h1>Night totals</h1><div class="links"><a class="link" href="/admin/supervisors">Supervisors</a><button type="button" class="link" id="sign-out">Sign out</button></div></div>
 <form id="night" novalidate>
 <div class="pair">
 <div><label for="date">Date</label><input id="date" type="date" value="${today}" required></div>
@@ -242,5 +245,146 @@ ${groups.map((g) => (g.lines.length ? html`<tr class="group"><td colspan="3">${g
 </form>
 </main>
 ${NIGHT_SCRIPT}`,
+  );
+}
+
+const ROLE_LABEL: Record<Role, string> = { part_time: 'Part-time', full_time: 'Full-time' };
+
+const SUPERVISORS_SCRIPT = raw(`<script>
+(function () {
+  var form = document.getElementById('add-supervisor');
+  var msg = document.getElementById('msg');
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var button = form.querySelector('button');
+    button.disabled = true;
+    msg.className = 'msg info';
+    msg.textContent = 'Adding...';
+    fetch('/api/admin/supervisors', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: document.getElementById('name').value,
+        pin: document.getElementById('pin').value,
+        role: document.getElementById('role').value
+      })
+    }).then(function (res) {
+      if (res.ok) { location.reload(); return; }
+      if (res.status === 401) { location.href = '/admin'; return; }
+      return res.json().then(function (body) {
+        msg.className = 'msg err';
+        msg.textContent = (body.errors || []).map(function (er) { return er.message; }).join(' ') || 'Could not add.';
+        button.disabled = false;
+      });
+    }).catch(function () {
+      msg.className = 'msg err';
+      msg.textContent = 'No connection. Try again.';
+      button.disabled = false;
+    });
+  });
+})();
+</script>`);
+
+// The ID number is left visible here so the admin can see a typo before adding; it is never shown again.
+export function supervisorsPage({ supervisors }: { supervisors: SupervisorInfo[] }) {
+  return layout(
+    'Supervisors',
+    html`<main>
+<div class="top"><h1>Supervisors</h1><a class="link" href="/admin">Night totals</a></div>
+<form id="add-supervisor">
+<label for="name">Full name</label>
+<input id="name" autocapitalize="words" autocomplete="off" maxlength="80" required>
+<label for="pin">ID number</label>
+<input id="pin" inputmode="numeric" pattern="[0-9]*" autocomplete="off" maxlength="12" required>
+<label for="role">Role</label>
+<select id="role">${ROLES.map((r) => html`<option value="${r}">${ROLE_LABEL[r]}</option>`)}</select>
+<div id="msg" role="alert"></div>
+<p><button type="submit">Add supervisor</button></p>
+</form>
+${
+  supervisors.length
+    ? html`<table>
+<thead><tr><th>Name</th><th>Role</th></tr></thead>
+<tbody>${supervisors.map((s) => html`<tr data-supervisor><td>${s.name}</td><td>${ROLE_LABEL[s.role]}</td></tr>`)}</tbody>
+</table>`
+    : html`<p>No supervisors yet.</p>`
+}
+</main>
+${SUPERVISORS_SCRIPT}`,
+  );
+}
+
+const SUPERVISOR_SIGN_IN_SCRIPT = raw(`<script>
+(function () {
+  var form = document.getElementById('supervisor-sign-in');
+  var msg = document.getElementById('msg');
+  var nameEl = document.getElementById('name');
+  var pinEl = document.getElementById('pin');
+  nameEl.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') { e.preventDefault(); pinEl.focus(); }
+  });
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var button = form.querySelector('button');
+    button.disabled = true;
+    msg.className = 'msg info';
+    msg.textContent = 'Checking...';
+    fetch('/api/supervisor/sign-in', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: nameEl.value, pin: pinEl.value })
+    }).then(function (res) {
+      if (res.ok) { location.reload(); return; }
+      return res.json().then(function (body) {
+        msg.className = 'msg err';
+        msg.textContent = body.error || 'Could not sign in.';
+        pinEl.value = '';
+        pinEl.focus();
+        button.disabled = false;
+      });
+    }).catch(function () {
+      msg.className = 'msg err';
+      msg.textContent = 'No connection. Try again.';
+      button.disabled = false;
+    });
+  });
+})();
+</script>`);
+
+export function supervisorSignInPage() {
+  return layout(
+    'Supervisor sign-in',
+    html`<main>
+<h1>Supervisor sign-in</h1>
+<form id="supervisor-sign-in">
+<label for="name">Full name</label>
+<input id="name" autocapitalize="words" autocomplete="name" enterkeyhint="next" required autofocus>
+<label for="pin">ID number</label>
+<input id="pin" type="password" inputmode="numeric" pattern="[0-9]*" autocomplete="off" enterkeyhint="go" required>
+<div id="msg" role="alert"></div>
+<p><button type="submit">Sign in</button></p>
+</form>
+</main>
+${SUPERVISOR_SIGN_IN_SCRIPT}`,
+  );
+}
+
+const SUPERVISOR_HOME_SCRIPT = raw(`<script>
+document.getElementById('sign-out').addEventListener('click', function () {
+  fetch('/api/supervisor/sign-out', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
+    .then(function () { location.reload(); });
+});
+</script>`);
+
+// A stand-in until the start-shift screen exists.
+export function supervisorHomePage({ name }: { name: string }) {
+  return layout(
+    'Signed in',
+    html`<main>
+<div class="top"><h1>Signed in</h1><button type="button" class="link" id="sign-out">Sign out</button></div>
+<p>You are signed in as <strong id="who">${name}</strong> for 12 hours on this phone.</p>
+<p>The shift screens are not built yet.</p>
+</main>
+${SUPERVISOR_HOME_SCRIPT}`,
   );
 }

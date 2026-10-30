@@ -21,7 +21,7 @@ If you can't reach the Sheet, ask me to paste the relevant rows instead of guess
 - Needs Node 24 or newer. There is no install step yet. `npm test` runs every test with Node's built-in test runner (TypeScript with the types stripped).
 - `src/scoring` holds every formula as a pure function. `db/` holds the migrations, the seed and the fake-night generator. Once the Worker exists, only its data module touches the database.
 - `npm run db:fake -- --date=YYYY-MM-DD --nights=5` builds a local SQLite file in `.local/` with the 27 lines and fake nights; `npm run db:reset` starts over.
-- `npm run dev:db` then `npm run dev` runs the site locally. The admin screen is `/admin`; its local code is in `.dev.vars` (copy `.dev.vars.example`; never committed).
+- `npm run dev:db` then `npm run dev` runs the site locally. The admin screen is `/admin` and supervisors sign in at `/sign-in`; local secrets are in `.dev.vars` (copy `.dev.vars.example`; never committed).
 
 # GitHub Usage Rules (budget: ~3,000/month → target under 40/day)
 

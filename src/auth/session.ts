@@ -11,7 +11,7 @@ export type Session = {
 
 const enc = new TextEncoder();
 
-function toBase64Url(bytes: Uint8Array): string {
+export function toBase64Url(bytes: Uint8Array): string {
   let s = '';
   for (const b of bytes) s += String.fromCharCode(b);
   return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
@@ -23,12 +23,12 @@ function fromBase64Url(s: string): Uint8Array {
   return Uint8Array.from(bin, (c) => c.charCodeAt(0));
 }
 
-async function hmac(secret: string, data: string): Promise<Uint8Array> {
+export async function hmac(secret: string, data: string): Promise<Uint8Array> {
   const key = await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
   return new Uint8Array(await crypto.subtle.sign('HMAC', key, enc.encode(data)));
 }
 
-async function sha256(s: string): Promise<Uint8Array> {
+export async function sha256(s: string): Promise<Uint8Array> {
   return new Uint8Array(await crypto.subtle.digest('SHA-256', enc.encode(s)));
 }
 

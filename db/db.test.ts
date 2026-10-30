@@ -33,7 +33,7 @@ const one = (db: DatabaseSync, sql: string, ...params: (string | number)[]) =>
 
 test('migrations create the tables and apply only once', () => {
   const db = openDb(':memory:');
-  assert.deepEqual(migrate(db), ['0001_init.sql', '0002_sign_in_failure.sql']);
+  assert.deepEqual(migrate(db), ['0001_init.sql', '0002_sign_in_failure.sql', '0003_supervisor_number_unique.sql']);
   const tables = all(db, "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name != '_migrations' ORDER BY name").map(
     (r) => r.name,
   );
@@ -92,8 +92,9 @@ test('the tables refuse bad data', () => {
   db.exec("INSERT INTO supervisor (full_name, pin_hash, role) VALUES ('Sample Person', 'x', 'part_time')");
   db.exec("INSERT INTO shift (date, sort) VALUES ('2026-10-26', 'Afternoon')");
 
-  assert.throws(() => db.exec("INSERT INTO supervisor (full_name, pin_hash, role) VALUES ('Other', 'x', 'manager')"), /CHECK/);
-  assert.throws(() => db.exec("INSERT INTO supervisor (full_name, pin_hash, role) VALUES ('sample person', 'x', 'full_time')"), /UNIQUE/);
+  assert.throws(() => db.exec("INSERT INTO supervisor (full_name, pin_hash, role) VALUES ('Other', 'y', 'manager')"), /CHECK/);
+  assert.throws(() => db.exec("INSERT INTO supervisor (full_name, pin_hash, role) VALUES ('sample person', 'y', 'full_time')"), /UNIQUE/); // same name
+  assert.throws(() => db.exec("INSERT INTO supervisor (full_name, pin_hash, role) VALUES ('Other', 'x', 'full_time')"), /UNIQUE/); // same number (D111)
   assert.throws(() => db.exec("INSERT INTO shift (date, sort) VALUES ('2026-10-26', 'Night')"), /CHECK/);
   assert.throws(() => db.exec("INSERT INTO shift (date, sort) VALUES ('2026-10-26', 'Afternoon')"), /UNIQUE/);
   assert.throws(() => db.exec("INSERT INTO line (id, type, grp, number) VALUES ('PX1', 'PX', 'North', 1)"), /CHECK/);
