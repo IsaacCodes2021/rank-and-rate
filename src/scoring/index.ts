@@ -107,8 +107,8 @@ export function overUnder(hrs: number | null, plan: number | null): number | nul
   return hrs - plan;
 }
 
-// Quarter hours with an entry / quarter hours elapsed, from the first interval entry to throughSlot (D019).
-export function onTimePercent(entries: Entry[], throughSlot: number): number | null {
+// Quarter hours with an entry and quarter hours elapsed, from the first interval entry to throughSlot (D019).
+export function onTimeParts(entries: Entry[], throughSlot: number): { hit: number; due: number } | null {
   const slots = new Set<number>();
   for (const e of entries) {
     if (e.kind === 'interval' && isNum(e.slot)) slots.add(e.slot);
@@ -118,7 +118,12 @@ export function onTimePercent(entries: Entry[], throughSlot: number): number | n
   if (throughSlot < first) return null;
   let hit = 0;
   for (const s of slots) if (s <= throughSlot) hit += 1;
-  return (hit / (throughSlot - first + 1)) * 100;
+  return { hit, due: throughSlot - first + 1 };
+}
+
+export function onTimePercent(entries: Entry[], throughSlot: number): number | null {
+  const parts = onTimeParts(entries, throughSlot);
+  return parts && (parts.hit / parts.due) * 100;
 }
 
 // Flow per hour = total volume / sort span in hours (D048).

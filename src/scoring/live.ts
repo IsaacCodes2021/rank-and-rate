@@ -1,6 +1,6 @@
 // The numbers on the live sort view (D027, D043, D019). Plain functions, like the rest of scoring:
 // no database and no clock. Everything works on one sort's lines only, so sorts cannot mix (D115).
-import { flowPerHour, hours, onTimePercent, overUnder, planHours, pph, effectiveness, quarterHourSlot, summarize, volume, type Entry, type Summary } from './index.ts';
+import { flowPerHour, hours, onTimeParts, overUnder, planHours, pph, effectiveness, quarterHourSlot, summarize, volume, type Entry, type Summary } from './index.ts';
 
 export type LineType = 'PS' | 'PD';
 
@@ -20,6 +20,7 @@ export type LineNumbers = {
   planHours: number | null;
   overUnder: number | null;
   onTime: number | null;
+  onTimeParts: { hit: number; due: number } | null;
   lastSlot: number | null;
   inPlay: boolean; // someone has picked this line or entered numbers on it
   hasFinal: boolean;
@@ -48,6 +49,7 @@ export function lineNumbers(line: LiveLineInput, nowMs: number, running = true):
   // A final covers its own quarter hour, so only the ones before it can be missed.
   const finalSlot = finalSlotOf(final);
   const through = final ? Math.max(lastSlot ?? 0, (finalSlot ?? 0) - 1) : Math.max(lastSlot ?? 0, closed);
+  const parts = onTimeParts(line.entries, through);
   return {
     hours: hrs,
     volume: vol,
@@ -55,7 +57,8 @@ export function lineNumbers(line: LiveLineInput, nowMs: number, running = true):
     effectiveness: effectiveness(actual, line.expectedPph),
     planHours: plan,
     overUnder: line.entries.length ? overUnder(hrs, plan) : null,
-    onTime: onTimePercent(line.entries, through),
+    onTime: parts && (parts.hit / parts.due) * 100,
+    onTimeParts: parts,
     lastSlot,
     inPlay,
     hasFinal: final !== undefined,

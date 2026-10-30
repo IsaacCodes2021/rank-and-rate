@@ -28,6 +28,7 @@ import {
 import { livePage, livePanel } from '../dashboard/live-page.ts';
 import { loadLiveSort, recentSorts } from '../data/live.ts';
 import { lastLines, myShift, myShifts, saveFinals, saveUpdates, setShiftLines, startShift } from '../data/shift.ts';
+import { isSampleSort, sampleLine, sampleOverview } from '../sample/pages.ts';
 import { nightPage, signInPage, supervisorSignInPage, supervisorSignUpPage, supervisorsPage } from '../entry/pages.ts';
 import { finalPage, shiftDonePage, sortsPage, startShiftPage, updatePage } from '../entry/shift-pages.ts';
 
@@ -151,6 +152,32 @@ export function createApp(options: AppOptions = {}) {
   };
   app.get('/live', async (c) => liveResponse(c, await livePanelFor(c.env.DB, null)));
   app.get('/live/:id{[0-9]+}', async (c) => liveResponse(c, await livePanelFor(c.env.DB, Number(c.req.param('id')))));
+
+  // Made-up numbers to show people the site, on the real screens (D121). None of this touches
+  // the database. A page never changes during a day, so each is kept once made.
+  const samplePages = new Map<string, string>();
+  const sampleResponse = async (c: Context<{ Bindings: Env }>, today: string, make: () => Promise<string | null>) => {
+    c.header('Cache-Control', 'no-store');
+    const key = `${today}|${c.req.url}`;
+    const page = samplePages.get(key) ?? (await make());
+    if (page === null) return c.redirect('/sample');
+    if (samplePages.size > 300) samplePages.clear();
+    samplePages.set(key, page);
+    return c.html(page);
+  };
+  app.get('/sample', (c) => {
+    const today = pacificDate(now());
+    return sampleResponse(c, today, () => sampleOverview(today, c.req.query('at')));
+  });
+  app.get('/sample/sort/:sort', (c) => {
+    const sort = c.req.param('sort');
+    const today = pacificDate(now());
+    return sampleResponse(c, today, async () => (isSampleSort(sort) ? sampleOverview(today, c.req.query('at'), sort) : null));
+  });
+  app.get('/sample/:line', (c) => {
+    const today = pacificDate(now());
+    return sampleResponse(c, today, () => sampleLine(today, c.req.param('line'), { period: c.req.query('period'), from: c.req.query('from'), to: c.req.query('to') }));
+  });
 
   // Used by the uptime monitor (D098): 200 only when the database answers.
   app.get('/api/health', async (c) => {

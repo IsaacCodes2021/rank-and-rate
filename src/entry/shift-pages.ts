@@ -6,17 +6,16 @@ import { html, raw } from 'hono/html';
 import { SORTS, type LineInfo } from '../data/night.ts';
 import type { MyShift, ShiftLine } from '../data/shift.ts';
 import { quarterHourSlot } from '../scoring/index.ts';
+import { clock, clockOf, count } from '../format.ts';
 import { layout } from './pages.ts';
 
-const clock = (iso: string) => new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Los_Angeles' });
-const count = (n: number) => n.toLocaleString('en-US');
 const oneDecimal = (n: number) => String(Math.round(n * 10) / 10);
 
 function soFar(line: ShiftLine) {
   if (line.lastAt === null) return 'No updates yet';
   const parts = [];
   if (line.lastHeadcount !== null) parts.push(`${line.lastHeadcount} people`);
-  parts.push(`${count(line.volume)} pieces at ${clock(line.lastAt)}`);
+  parts.push(`${count(line.volume)} pieces at ${clockOf(line.lastAt)}`);
   parts.push(line.pph === null ? 'no PPH yet' : `${count(Math.round(line.pph))} PPH`);
   return `Last: ${parts.join(' · ')}`;
 }
@@ -192,7 +191,7 @@ export function updatePage({ name, shift, others, now, justSaved }: UpdatePageIn
   const lastOpen = open.length ? open[open.length - 1].lineId : '';
   const closed = shift.lines.filter((l) => l.finalVolume !== null);
   // Says when to come back, so nobody has to keep the app open between updates.
-  const next = clock(new Date((quarterHourSlot(now.getTime()) + 1) * 15 * 60 * 1000).toISOString());
+  const next = clock((quarterHourSlot(now.getTime()) + 1) * 15 * 60 * 1000);
   const started = open.some((l) => l.lastAt !== null);
   return layout(
     `${shift.sort} update`,
