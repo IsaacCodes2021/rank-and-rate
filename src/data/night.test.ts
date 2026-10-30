@@ -4,7 +4,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { d1Shim } from '../../db/d1-shim.ts';
 import { migrate, openDb, seed } from '../../db/lib.ts';
 import { effectiveness, expectedPph, hours, pph, planHours, round, volume, type Entry } from '../scoring/index.ts';
-import { MAX_HOURS, ValidationError, saveNightTotals, type NightRow } from './night.ts';
+import { MAX_HOURS, ValidationError, getNightTotals, listActiveLines, saveNightTotals, type NightRow } from './night.ts';
 
 const setup = () => {
   const sqlite = openDb(':memory:');
@@ -180,4 +180,34 @@ test('a full-timer saving for themselves is recorded, and an admin correction ke
   const entry = sqlite.prepare("SELECT supervisor_id AS s, total_hours AS h FROM entry WHERE line_id = 'PS1'").get() as { s: number; h: number };
   assert.deepEqual({ ...entry }, { s: 1, h: 9.5 });
   assert.equal(count(sqlite, "SELECT count(*) AS n FROM audit_log WHERE actor = 'admin' AND action = 'night totals changed'"), 1);
+});
+
+test('active lines come in screen order: PS then PD, by number, without inactive ones', async () => {
+  const { sqlite, db } = setup();
+  const ids = (await listActiveLines(db)).map((l) => l.id);
+  assert.equal(ids.length, 27);
+  assert.deepEqual(ids.slice(0, 3), ['PS1', 'PS2', 'PS3']);
+  assert.equal(ids[12], 'PS14');
+  assert.equal(ids[13], 'PD1');
+  assert.equal(ids[26], 'PD14');
+  assert.ok(!ids.includes('PS13'));
+  sqlite.prepare("UPDATE line SET active = 0 WHERE id = 'PD2'").run();
+  assert.equal((await listActiveLines(db)).length, 26);
+});
+
+test('a saved night reads back for correcting, including hours worked out from 15-minute entries', async () => {
+  const { sqlite, db } = setup();
+  await saveNightTotals(db, { ...base, rows: rowsOf(sqlite, (id) => (id === 'PS1' ? { hours: 12.5, volume: 6800 } : {})) }, NOW);
+  // PD1 ran the phone flow: four quarter hours of 4 people, then a final update with no total hours
+  for (let k = 0; k < 4; k += 1) {
+    sqlite.exec(`INSERT INTO entry (shift_id, line_id, slot, kind, headcount, running_volume, created_at)
+                 VALUES (1, 'PD1', ${1000 + k}, 'interval', 4, ${100 * (k + 1)}, '2026-10-26T20:15:00Z')`);
+  }
+  sqlite.exec(`INSERT INTO entry (shift_id, line_id, kind, running_volume, created_at) VALUES (1, 'PD1', 'final', 450, '2026-10-26T21:20:00Z')`);
+
+  assert.deepEqual(await getNightTotals(db, '2026-10-26', 'Afternoon'), [
+    { lineId: 'PD1', hours: 4, volume: 450 },
+    { lineId: 'PS1', hours: 12.5, volume: 6800 },
+  ]);
+  assert.deepEqual(await getNightTotals(db, '2026-10-26', 'Twilight'), []);
 });

@@ -1,13 +1,23 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { createMiddleware } from 'hono/factory';
+import { secureHeaders } from 'hono/secure-headers';
 import { FAILURE_DELAY_MS, isLocked, recordFailure } from '../auth/limits.ts';
 import { SESSION_SECONDS, readSession, sameSecret, signSession } from '../auth/session.ts';
-import { ValidationError, saveNightTotals, type NightRow } from '../data/night.ts';
+import {
+  ValidationError,
+  getNightTotals,
+  isRealDate,
+  isSort,
+  listActiveLines,
+  saveNightTotals,
+  type NightRow,
+} from '../data/night.ts';
+import { nightPage, signInPage } from '../entry/pages.ts';
 
 export type Env = {
   DB: D1Database;
-  ADMIN_CODE?: string; // Cloudflare secret (D058, D108)
+  ADMIN_CODE?: string; // Cloudflare secret (D058, D109)
   SESSION_SECRET?: string; // Cloudflare secret that signs the session cookie
 };
 
@@ -40,6 +50,9 @@ const PAGE = `<!doctype html>
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// The building's local date (D049 sorts are local), as YYYY-MM-DD.
+export const pacificDate = (d: Date) => d.toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+
 // A form row as sent by the browser; anything odd becomes a blank that saveNightTotals reports.
 function toNightRow(raw: unknown): NightRow {
   const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
@@ -57,8 +70,11 @@ export function createApp(options: AppOptions = {}) {
     return c.json({ ok: false, error: 'Something went wrong.' }, 500);
   });
 
+  // Stops other sites framing these pages, and similar browser protections.
+  app.use('*', secureHeaders());
+
   // Every POST must be JSON. With the SameSite=Strict cookie this stops other sites from
-  // submitting forms on the admin's behalf.
+  // submitting forms on the admin's behalf. Admin answers are never cached.
   app.use('/api/*', async (c, next) => {
     const type = (c.req.header('content-type') ?? '').toLowerCase();
     if (c.req.method === 'POST' && !type.startsWith('application/json')) {
@@ -66,12 +82,19 @@ export function createApp(options: AppOptions = {}) {
     }
     await next();
   });
+  app.use('/api/admin/*', async (c, next) => {
+    await next();
+    c.header('Cache-Control', 'no-store');
+  });
 
-  const requireAdmin = createMiddleware<{ Bindings: Env }>(async (c, next) => {
+  const isAdmin = async (c: Context<{ Bindings: Env }>) => {
     const secret = c.env.SESSION_SECRET;
     const token = getCookie(c, ADMIN_COOKIE);
-    const session = secret && token ? await readSession(token, secret, now().getTime()) : null;
-    if (!session) return c.json({ ok: false, error: 'Sign in as admin first.' }, 401);
+    return Boolean(secret && token && (await readSession(token, secret, now().getTime())));
+  };
+
+  const requireAdmin = createMiddleware<{ Bindings: Env }>(async (c, next) => {
+    if (!(await isAdmin(c))) return c.json({ ok: false, error: 'Sign in as admin first.' }, 401);
     await next();
   });
 
@@ -123,6 +146,23 @@ export function createApp(options: AppOptions = {}) {
   });
 
   app.get('/api/admin/me', requireAdmin, (c) => c.json({ ok: true, role: 'admin' }));
+
+  // The admin's phone screen: sign-in first, then the night totals (D056 key flow 2, D065).
+  app.get('/admin', async (c) => {
+    c.header('Cache-Control', 'no-store');
+    if (!(await isAdmin(c))) return c.html(signInPage());
+    return c.html(nightPage({ lines: await listActiveLines(c.env.DB), today: pacificDate(now()) }));
+  });
+
+  // What is already saved for a date and sort, so the screen can show it for correcting.
+  app.get('/api/admin/night', requireAdmin, async (c) => {
+    const date = c.req.query('date') ?? '';
+    const sort = c.req.query('sort') ?? '';
+    if (!isRealDate(date) || !isSort(sort)) {
+      return c.json({ ok: false, errors: [{ lineId: null, message: 'Pick a real date and a sort.' }] }, 400);
+    }
+    return c.json({ ok: true, rows: await getNightTotals(c.env.DB, date, sort) });
+  });
 
   // Isaac's end-of-night totals for the beta (D052, D065).
   app.post('/api/admin/night', requireAdmin, async (c) => {

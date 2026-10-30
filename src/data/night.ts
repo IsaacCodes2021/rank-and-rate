@@ -2,6 +2,7 @@
 // total hours and volume. The admin's beta screen and the full-timer screen both save through here.
 // Blank rows are skipped. If any row is wrong nothing is saved. A second save for the same
 // night replaces the first, and the audit log keeps what was there before.
+import { hours as hoursFromEntries, type Entry } from '../scoring/index.ts';
 
 export const SORTS = ['Afternoon', 'Morning', 'Twilight'] as const;
 export type Sort = (typeof SORTS)[number];
@@ -45,10 +46,48 @@ export class ValidationError extends Error {
 
 const isBlank = (v: unknown) => v === null || v === undefined || (typeof v === 'string' && v.trim() === '');
 
-function isRealDate(s: string): boolean {
+export function isRealDate(s: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
   const d = new Date(`${s}T00:00:00Z`);
   return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
+}
+
+export const isSort = (s: string): s is Sort => (SORTS as readonly string[]).includes(s);
+
+export type LineInfo = { id: string; type: string; number: number };
+
+// Active lines in screen order: PS then PD, by number (D065).
+export async function listActiveLines(db: D1Database): Promise<LineInfo[]> {
+  const r = await db.prepare('SELECT id, type, number FROM line WHERE active = 1 ORDER BY type DESC, number').all<LineInfo>();
+  return r.results;
+}
+
+export type SavedTotal = { lineId: string; hours: number; volume: number };
+
+// What is already saved for a night, so the screen can show it for correcting. A final entry
+// from the phone flow has no total_hours; its hours come from the quarter-hour entries.
+export async function getNightTotals(db: D1Database, date: string, sort: string): Promise<SavedTotal[]> {
+  const rows = await db
+    .prepare(
+      `SELECT e.line_id, e.slot, e.kind, e.headcount, e.running_volume, e.total_hours
+         FROM entry e JOIN shift s ON s.id = e.shift_id
+        WHERE s.date = ? AND s.sort = ?`,
+    )
+    .bind(date, sort)
+    .all<{ line_id: string; slot: number | null; kind: Entry['kind']; headcount: number | null; running_volume: number | null; total_hours: number | null }>();
+  const byLine = new Map<string, Entry[]>();
+  for (const r of rows.results) {
+    const list = byLine.get(r.line_id) ?? [];
+    list.push({ kind: r.kind, slot: r.slot, headcount: r.headcount, runningVolume: r.running_volume, totalHours: r.total_hours });
+    byLine.set(r.line_id, list);
+  }
+  const out: SavedTotal[] = [];
+  for (const [lineId, entries] of byLine) {
+    const final = entries.find((e) => e.kind === 'final');
+    if (!final || final.runningVolume === null) continue;
+    out.push({ lineId, hours: Math.round(hoursFromEntries(entries) * 100) / 100, volume: final.runningVolume });
+  }
+  return out.sort((a, b) => a.lineId.localeCompare(b.lineId));
 }
 
 type Existing = { line_id: string; running_volume: number | null; total_hours: number | null };
@@ -56,7 +95,7 @@ type Existing = { line_id: string; running_volume: number | null; total_hours: n
 export async function saveNightTotals(db: D1Database, input: NightInput, now: Date = new Date()): Promise<NightResult> {
   const errors: FieldError[] = [];
   if (!isRealDate(input.date)) errors.push({ lineId: null, message: 'Pick a real date (YYYY-MM-DD).' });
-  if (!(SORTS as readonly string[]).includes(input.sort)) errors.push({ lineId: null, message: 'Pick Afternoon, Morning or Twilight.' });
+  if (!isSort(input.sort)) errors.push({ lineId: null, message: 'Pick Afternoon, Morning or Twilight.' });
 
   const lines = await db.prepare('SELECT id FROM line WHERE active = 1').all<{ id: string }>();
   const activeLines = new Set(lines.results.map((l) => l.id));
