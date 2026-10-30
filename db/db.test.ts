@@ -31,9 +31,9 @@ const all = (db: DatabaseSync, sql: string, ...params: (string | number)[]) =>
 const one = (db: DatabaseSync, sql: string, ...params: (string | number)[]) =>
   db.prepare(sql).get(...params) as Record<string, unknown>;
 
-test('migration creates the 9 tables and applies only once', () => {
+test('migrations create the tables and apply only once', () => {
   const db = openDb(':memory:');
-  assert.deepEqual(migrate(db), ['0001_init.sql']);
+  assert.deepEqual(migrate(db), ['0001_init.sql', '0002_sign_in_failure.sql']);
   const tables = all(db, "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name != '_migrations' ORDER BY name").map(
     (r) => r.name,
   );
@@ -46,6 +46,7 @@ test('migration creates the 9 tables and applies only once', () => {
     'session',
     'settings',
     'shift',
+    'sign_in_failure',
     'supervisor',
   ]);
   assert.deepEqual(migrate(db), []);

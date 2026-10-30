@@ -2,9 +2,15 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { d1Shim } from '../../db/d1-shim.ts';
 import { migrate, openDb, seed } from '../../db/lib.ts';
-import { createApp, type Env } from './index.ts';
+import { createApp, type Env } from './app.ts';
 
 const fakeD1 = (db: ReturnType<typeof openDb>): Env['DB'] => d1Shim(db);
+
+test('the entry file exports only the Worker (Cloudflare refuses any other export)', async () => {
+  const entry = await import('./index.ts');
+  assert.deepEqual(Object.keys(entry), ['default']);
+  assert.equal(typeof entry.default.fetch, 'function');
+});
 
 test('the home page is a plain placeholder with a phone viewport', async () => {
   const res = await createApp().request('/', {}, { DB: {} as Env['DB'] });
