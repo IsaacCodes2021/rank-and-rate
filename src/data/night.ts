@@ -44,7 +44,7 @@ export class ValidationError extends Error {
   }
 }
 
-const isBlank = (v: unknown) => v === null || v === undefined || (typeof v === 'string' && v.trim() === '');
+export const isBlank = (v: unknown) => v === null || v === undefined || (typeof v === 'string' && v.trim() === '');
 
 export function isRealDate(s: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;

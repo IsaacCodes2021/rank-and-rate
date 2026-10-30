@@ -9,6 +9,7 @@ import {
   overUnder,
   pph,
   planHours,
+  quarterHourSlot,
   round,
   sortStartMs,
   summarize,
@@ -123,6 +124,17 @@ test('on-time %: no interval entries, or asking before the first one, is null', 
 
 test('flow per hour: total volume over the sort span (D048)', () => {
   assert.equal(flowPerHour(9647, 5.5), 1754);
+});
+
+test('an update counts for the nearest quarter hour', () => {
+  const at = (h: number, m: number, s = 0) => Date.UTC(2026, 9, 26, h, m, s);
+  const quarter = (h: number, m: number) => at(h, m) / (15 * 60 * 1000);
+  assert.equal(quarterHourSlot(at(13, 15)), quarter(13, 15));
+  assert.equal(quarterHourSlot(at(13, 14)), quarter(13, 15));
+  assert.equal(quarterHourSlot(at(13, 16)), quarter(13, 15));
+  assert.equal(quarterHourSlot(at(13, 22, 29)), quarter(13, 15));
+  assert.equal(quarterHourSlot(at(13, 22, 30)), quarter(13, 30));
+  assert.equal(quarterHourSlot(at(13, 29)), quarter(13, 30));
 });
 
 test('sort start: first entry minus 15 minutes, rounded to the nearest 5 (D066)', () => {

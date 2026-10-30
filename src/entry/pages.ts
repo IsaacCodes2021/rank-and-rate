@@ -37,9 +37,22 @@ const STYLE = raw(`<style>
   .number { font-size: 32px; font-weight: 700; letter-spacing: 1px; margin: 8px 0 16px; overflow-wrap: anywhere; }
   .note { font-size: 15px; color: #444; }
   h2:focus { outline: none; }
+  .sub { font-size: 15px; color: #444; margin: 0 0 8px; }
+  .picks { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .pick { position: relative; margin: 0; font-weight: 700; }
+  .pick input { position: absolute; inset: 0; width: 100%; height: 100%; min-height: 0; margin: 0; opacity: 0; cursor: pointer; }
+  .pick span { display: block; min-height: 48px; line-height: 44px; text-align: center; border: 2px solid #555; border-radius: 6px; }
+  .pick input:checked + span { background: #111; border-color: #111; color: #fff; }
+  .pick input:disabled + span { background: #555; border-color: #555; color: #fff; }
+  .pick input:focus + span { outline: 3px solid #0a58ca; outline-offset: 1px; }
+  tr.info td { padding: 0 4px 10px; font-size: 14px; color: #444; }
+  .more { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 16px 0; }
+  .top .link { white-space: nowrap; }
+  .picks.sorts { grid-template-columns: repeat(3, 1fr); }
+  a.button { display: inline-block; min-height: 48px; line-height: 48px; padding: 0 22px; border-radius: 6px; background: #111; color: #fff; font-weight: 700; text-decoration: none; }
 </style>`);
 
-function layout(title: string, body: unknown) {
+export function layout(title: string, body: unknown) {
   return html`<!doctype html>
 <html lang="en">
 <head>
@@ -323,6 +336,11 @@ const SUPERVISOR_SIGN_IN_SCRIPT = raw(`<script>
   var msg = document.getElementById('msg');
   var nameEl = document.getElementById('name');
   var pinEl = document.getElementById('pin');
+  // The phone remembers the name, so the next sign-in is only the ID number. Names are public anyway (D101).
+  try {
+    var remembered = localStorage.getItem('rr_name');
+    if (remembered) { nameEl.value = remembered; pinEl.focus(); }
+  } catch (err) {}
   nameEl.addEventListener('keydown', function (e) {
     if (e.key === 'Enter') { e.preventDefault(); pinEl.focus(); }
   });
@@ -337,7 +355,11 @@ const SUPERVISOR_SIGN_IN_SCRIPT = raw(`<script>
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ name: nameEl.value, pin: pinEl.value })
     }).then(function (res) {
-      if (res.ok) { location.reload(); return; }
+      if (res.ok) {
+        try { localStorage.setItem('rr_name', nameEl.value.trim()); } catch (err) {}
+        location.reload();
+        return;
+      }
       return res.json().then(function (body) {
         msg.className = 'msg err';
         msg.textContent = body.error || 'Could not sign in.';
@@ -419,7 +441,11 @@ const SUPERVISOR_SIGN_UP_SCRIPT = raw(`<script>
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ code: codeEl.value, name: nameEl.value, pin: pinEl.value, role: roleEl.value })
     }).then(function (res) {
-      if (res.ok) { location.href = '/sign-in'; return; }
+      if (res.ok) {
+        try { localStorage.setItem('rr_name', nameEl.value.trim()); } catch (err) {}
+        location.href = '/shift';
+        return;
+      }
       return res.json().then(function (body) {
         var text = (body.errors || []).map(function (er) { return er.message; }).join(' ') || 'Could not create the account.';
         showForm('err', text, res.status === 401 ? codeEl : pinEl);
@@ -472,22 +498,3 @@ ${SUPERVISOR_SIGN_UP_SCRIPT}`,
   );
 }
 
-const SUPERVISOR_HOME_SCRIPT = raw(`<script>
-document.getElementById('sign-out').addEventListener('click', function () {
-  fetch('/api/supervisor/sign-out', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
-    .then(function () { location.reload(); });
-});
-</script>`);
-
-// A stand-in until the start-shift screen exists.
-export function supervisorHomePage({ name }: { name: string }) {
-  return layout(
-    'Signed in',
-    html`<main>
-<div class="top"><h1>Signed in</h1><button type="button" class="link" id="sign-out">Sign out</button></div>
-<p>You are signed in as <strong id="who">${name}</strong> for 12 hours on this phone.</p>
-<p>The shift screens are not built yet.</p>
-</main>
-${SUPERVISOR_HOME_SCRIPT}`,
-  );
-}

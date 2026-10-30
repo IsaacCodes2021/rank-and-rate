@@ -22,9 +22,12 @@ import {
   listSupervisors,
   normalizeName,
   startSession,
+  type SupervisorInfo,
   type SupervisorLogin,
 } from '../data/supervisor.ts';
-import { nightPage, signInPage, supervisorHomePage, supervisorSignInPage, supervisorSignUpPage, supervisorsPage } from '../entry/pages.ts';
+import { lastLines, myShift, myShifts, saveFinals, saveUpdates, setShiftLines, startShift } from '../data/shift.ts';
+import { nightPage, signInPage, supervisorSignInPage, supervisorSignUpPage, supervisorsPage } from '../entry/pages.ts';
+import { finalPage, shiftDonePage, sortsPage, startShiftPage, updatePage } from '../entry/shift-pages.ts';
 
 export type Env = {
   DB: D1Database;
@@ -67,7 +70,8 @@ const PAGE = `<!doctype html>
 </head>
 <body>
 <h1>Rank and Rate</h1>
-<p>The site is being built. Dashboards and entry screens will appear here.</p>
+<p>The site is being built. Dashboards will appear here.</p>
+<p><a href="/shift">Start shift</a></p>
 </body>
 </html>`;
 
@@ -260,8 +264,8 @@ export function createApp(options: AppOptions = {}) {
   // Supervisor sign-in: full name and ID number once, then signed in for 12 hours (D083, D111).
   app.get('/sign-in', async (c) => {
     c.header('Cache-Control', 'no-store');
-    const supervisor = await supervisorOf(c);
-    return c.html(supervisor ? supervisorHomePage({ name: supervisor.name }) : supervisorSignInPage());
+    if (await supervisorOf(c)) return c.redirect('/shift');
+    return c.html(supervisorSignInPage());
   });
 
   app.post('/api/supervisor/sign-in', async (c) => {
@@ -340,6 +344,91 @@ export function createApp(options: AppOptions = {}) {
     if (!supervisor) return c.json({ ok: false, error: 'Sign in first.' }, 401);
     return c.json({ ok: true, name: supervisor.name, role: supervisor.role });
   });
+
+  // The supervisor's night (D032, D005): start shift, 15-minute updates, final update.
+  // A supervisor can have several sorts open. Each has its own screens and they never mix (D115).
+  app.get('/shift', async (c) => {
+    c.header('Cache-Control', 'no-store');
+    const who = await supervisorOf(c);
+    if (!who) return c.redirect('/sign-in');
+    const shifts = await myShifts(c.env.DB, who.id, now());
+    const open = shifts.filter((s) => !s.finished);
+    if (open.length > 1) return c.html(sortsPage({ name: who.name, shifts: open }));
+    if (open.length === 1) return c.redirect(`/shift/${open[0].id}`);
+    // Nothing open: they are here for their next sort, with any finished one a tap away.
+    return c.html(startShiftPage({ name: who.name, lines: await listActiveLines(c.env.DB), ticked: await lastLines(c.env.DB, who.id), finished: shifts }));
+  });
+
+  app.get('/shift/start', async (c) => {
+    c.header('Cache-Control', 'no-store');
+    const who = await supervisorOf(c);
+    if (!who) return c.redirect('/sign-in');
+    return c.html(startShiftPage({ name: who.name, lines: await listActiveLines(c.env.DB), ticked: await lastLines(c.env.DB, who.id), canGoBack: true }));
+  });
+
+  app.get('/shift/:id{[0-9]+}', async (c) => {
+    c.header('Cache-Control', 'no-store');
+    const who = await supervisorOf(c);
+    if (!who) return c.redirect('/sign-in');
+    const at = now();
+    const shifts = await myShifts(c.env.DB, who.id, at);
+    const shift = shifts.find((s) => s.id === Number(c.req.param('id')));
+    if (!shift) return c.redirect('/shift');
+    const others = shifts.filter((s) => s.id !== shift.id && !s.finished);
+    if (shift.finished) return c.html(shiftDonePage({ name: who.name, shift, others }));
+    return c.html(updatePage({ name: who.name, shift, others, now: at, justSaved: c.req.query('saved') !== undefined }));
+  });
+
+  app.get('/shift/:id{[0-9]+}/lines', async (c) => {
+    c.header('Cache-Control', 'no-store');
+    const who = await supervisorOf(c);
+    if (!who) return c.redirect('/sign-in');
+    const shift = await myShift(c.env.DB, who.id, Number(c.req.param('id')), now());
+    if (!shift) return c.redirect('/shift');
+    return c.html(startShiftPage({ name: who.name, lines: await listActiveLines(c.env.DB), current: shift, canGoBack: true }));
+  });
+
+  app.get('/shift/:id{[0-9]+}/final', async (c) => {
+    c.header('Cache-Control', 'no-store');
+    const who = await supervisorOf(c);
+    if (!who) return c.redirect('/sign-in');
+    const shift = await myShift(c.env.DB, who.id, Number(c.req.param('id')), now());
+    if (!shift) return c.redirect('/shift');
+    return c.html(finalPage({ name: who.name, shift }));
+  });
+
+  // A supervisor's save: sign-in checked, JSON read, and a refused save answered with its errors.
+  const supervisorPost = (path: string, save: (who: SupervisorInfo, body: Record<string, unknown>, at: Date, db: D1Database) => Promise<object | void>) =>
+    app.post(path, async (c) => {
+      const who = await supervisorOf(c);
+      if (!who) return c.json({ ok: false, error: 'Sign in first.' }, 401);
+      const parsed: unknown = await c.req.json().catch(() => null);
+      const body = (parsed && typeof parsed === 'object' ? parsed : {}) as Record<string, unknown>;
+      try {
+        return c.json({ ok: true, ...(await save(who, body, now(), c.env.DB)) });
+      } catch (err) {
+        if (err instanceof ValidationError) return c.json({ ok: false, errors: err.errors }, 400);
+        throw err;
+      }
+    });
+
+  // A form row as sent by the browser; anything odd becomes a blank or a value the save refuses.
+  const rowsOf = (body: Record<string, unknown>) =>
+    (Array.isArray(body.rows) ? body.rows : []).map((raw: unknown) => {
+      const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+      const field = (v: unknown) => (typeof v === 'number' || typeof v === 'string' ? v : null);
+      return { lineId: typeof r.lineId === 'string' ? r.lineId : '', headcount: field(r.headcount), volume: field(r.volume) };
+    });
+
+  // The sort a save is for is always the one on the screen it came from, never a guess (D115).
+  const shiftIdOf = (body: Record<string, unknown>) => (typeof body.shiftId === 'number' ? body.shiftId : Number.NaN);
+
+  supervisorPost('/api/supervisor/shift', (who, body, at, db) =>
+    startShift(db, who, { sort: typeof body.sort === 'string' ? body.sort : '', lineIds: body.lines, today: pacificDate(at) }, at),
+  );
+  supervisorPost('/api/supervisor/shift/lines', (who, body, at, db) => setShiftLines(db, who, shiftIdOf(body), body.lines, at));
+  supervisorPost('/api/supervisor/update', (who, body, at, db) => saveUpdates(db, who, shiftIdOf(body), rowsOf(body), at));
+  supervisorPost('/api/supervisor/final', (who, body, at, db) => saveFinals(db, who, shiftIdOf(body), rowsOf(body), at));
 
   return app;
 }

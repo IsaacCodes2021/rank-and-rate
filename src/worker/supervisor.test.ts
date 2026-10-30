@@ -285,14 +285,16 @@ test('/sign-in shows the form, with a number keypad, and never gets cached', asy
   assert.match(page, /<input id="pin" type="password" inputmode="numeric"/);
 });
 
-test('once signed in, /sign-in shows who you are, with the name made safe for the page', async () => {
+test('once signed in, /sign-in goes to the shift screen, with the name made safe for the page', async () => {
   const t = await setup();
   await t.add('Pat <b>Sample</b>', NUMBER);
   const cookie = cookieOf(await t.signIn('Pat <b>Sample</b>', NUMBER));
-  const page = await (await t.get('/sign-in', cookie)).text();
+  const res = await t.get('/sign-in', cookie);
+  assert.equal(res.status, 302);
+  assert.equal(res.headers.get('location'), '/shift');
+  const page = await (await t.get('/shift', cookie)).text();
   assert.match(page, /Pat &lt;b&gt;Sample&lt;\/b&gt;/);
   assert.ok(!page.includes('<b>Sample'));
-  assert.ok(!page.includes('id="supervisor-sign-in"'));
 });
 
 test('the supervisors page is admin only, lists names and roles, and shows no numbers or hashes', async () => {

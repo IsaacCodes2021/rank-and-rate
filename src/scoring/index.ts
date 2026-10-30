@@ -108,6 +108,12 @@ export function flowPerHour(totalVolume: number | null, spanHours: number | null
   return totalVolume / spanHours;
 }
 
+// The quarter hour an update belongs to: the nearest one, so 13:14 and 13:16 both count for
+// 13:15, in quarter hours since the Unix epoch. A second update in that window replaces the first.
+export function quarterHourSlot(ms: number): number {
+  return Math.round(ms / (15 * 60 * 1000));
+}
+
 // Sort start = first entry - 15 minutes, rounded to the nearest 5 minutes (D066).
 export function sortStartMs(firstEntryMs: number): number {
   const FIVE_MIN = 5 * 60 * 1000;
