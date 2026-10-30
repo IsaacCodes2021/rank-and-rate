@@ -105,11 +105,17 @@ test('no cookie, a changed cookie, or one signed with another key is refused', a
 });
 
 test('sign-in refuses to work until both secrets are set and long enough', async () => {
-  for (const env of [{ ADMIN_CODE: undefined }, { SESSION_SECRET: undefined }, { ADMIN_CODE: 'short' }, { SESSION_SECRET: 'too-short' }]) {
+  for (const env of [{ ADMIN_CODE: undefined }, { SESSION_SECRET: undefined }, { ADMIN_CODE: 'abc' }, { SESSION_SECRET: 'too-short' }]) {
     const t = setup({}, env);
     const res = await t.post('/api/admin/sign-in', { code: CODE });
     assert.equal(res.status, 503);
   }
+});
+
+test('a 4-character admin code is allowed (D109)', async () => {
+  const t = setup({}, { ADMIN_CODE: '4821' });
+  assert.equal((await t.post('/api/admin/sign-in', { code: '4821' })).status, 200);
+  assert.equal((await t.post('/api/admin/sign-in', { code: '4822' })).status, 401);
 });
 
 test('posts must be JSON', async () => {

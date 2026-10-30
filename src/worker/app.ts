@@ -17,7 +17,7 @@ export type AppOptions = {
 };
 
 export const ADMIN_COOKIE = 'rr_admin';
-const MIN_ADMIN_CODE = 8;
+const MIN_ADMIN_CODE = 4; // D109: short on purpose; the lockout in D107 limits guessing
 const MIN_SESSION_SECRET = 32;
 
 const PAGE = `<!doctype html>
