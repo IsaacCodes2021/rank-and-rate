@@ -12,13 +12,10 @@ test('the entry file exports only the Worker (Cloudflare refuses any other expor
   assert.equal(typeof entry.default.fetch, 'function');
 });
 
-test('the home page is a plain placeholder with a phone viewport', async () => {
+test('the home address goes to the live sort view', async () => {
   const res = await createApp().request('/', {}, { DB: {} as Env['DB'] });
-  assert.equal(res.status, 200);
-  assert.match(res.headers.get('content-type') ?? '', /text\/html/);
-  const body = await res.text();
-  assert.match(body, /<title>Rank and Rate<\/title>/);
-  assert.match(body, /name="viewport"/);
+  assert.equal(res.status, 302);
+  assert.equal(res.headers.get('location'), '/live');
 });
 
 test('health reports the 27 seeded lines when the database answers', async () => {

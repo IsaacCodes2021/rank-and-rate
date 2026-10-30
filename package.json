@@ -13,6 +13,7 @@
     "deploy": "wrangler deploy",
     "dev": "wrangler dev",
     "dev:db": "wrangler d1 migrations apply rank-and-rate --local && wrangler d1 execute rank-and-rate --local --file=db/seed.sql",
+    "dev:fake-live": "node scripts/fake-live.ts && wrangler d1 execute rank-and-rate --local --file=.local/fake-live.sql",
     "db:init": "node --disable-warning=ExperimentalWarning scripts/db.ts init",
     "db:seed": "node --disable-warning=ExperimentalWarning scripts/db.ts seed",
     "db:fake": "node --disable-warning=ExperimentalWarning scripts/db.ts fake",

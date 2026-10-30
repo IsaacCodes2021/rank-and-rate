@@ -11,6 +11,7 @@ function toParam(v: unknown): Param {
 }
 
 type ShimStatement = {
+  sql: string;
   bind: (...values: unknown[]) => ShimStatement;
   first: <T = unknown>() => Promise<T | null>;
   all: <T = unknown>() => Promise<{ results: T[]; success: true; meta: object }>;
@@ -19,6 +20,7 @@ type ShimStatement = {
 
 export function d1Shim(db: DatabaseSync): D1Database {
   const make = (sql: string, params: Param[] = []): ShimStatement => ({
+    sql,
     bind: (...values) => make(sql, values.map(toParam)),
     first: async <T>() => (db.prepare(sql).get(...params) as T | undefined) ?? null,
     all: async <T>() => ({ results: db.prepare(sql).all(...params) as T[], success: true as const, meta: {} }),
@@ -35,7 +37,8 @@ export function d1Shim(db: DatabaseSync): D1Database {
       db.exec('BEGIN');
       try {
         const out = [];
-        for (const s of statements) out.push(await s.run());
+        // A read in a batch hands back its rows, as it does on D1.
+        for (const s of statements) out.push(db.prepare(s.sql).columns().length > 0 ? await s.all() : await s.run());
         db.exec('COMMIT');
         return out;
       } catch (err) {

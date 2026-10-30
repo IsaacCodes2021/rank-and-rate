@@ -25,6 +25,8 @@ import {
   type SupervisorInfo,
   type SupervisorLogin,
 } from '../data/supervisor.ts';
+import { livePage, livePanel } from '../dashboard/live-page.ts';
+import { loadLiveSort, recentSorts } from '../data/live.ts';
 import { lastLines, myShift, myShifts, saveFinals, saveUpdates, setShiftLines, startShift } from '../data/shift.ts';
 import { nightPage, signInPage, supervisorSignInPage, supervisorSignUpPage, supervisorsPage } from '../entry/pages.ts';
 import { finalPage, shiftDonePage, sortsPage, startShiftPage, updatePage } from '../entry/shift-pages.ts';
@@ -48,6 +50,7 @@ const MIN_ADMIN_CODE = 4; // D109: short on purpose; the lockout in D107 limits 
 const MIN_SESSION_SECRET = 32;
 const MIN_PIN_SALT = 32;
 const MIN_SIGNUP_CODE = 4;
+const LIVE_CACHE_MS = 20_000;
 const WRONG_SIGN_IN = 'That name and ID number do not match.'; // the same whichever one was wrong
 
 // Sign-up is open only when both secrets are set and long enough.
@@ -55,25 +58,6 @@ function signUpSecrets(env: Env) {
   const { SIGNUP_CODE: code, PIN_SALT: salt } = env;
   return code && code.length >= MIN_SIGNUP_CODE && salt && salt.length >= MIN_PIN_SALT ? { code, salt } : null;
 }
-
-const PAGE = `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Rank and Rate</title>
-<style>
-  body { margin: 0; padding: 24px 16px; font: 18px/1.5 system-ui, sans-serif; color: #111; background: #fff; }
-  h1 { margin: 0 0 8px; font-size: 28px; }
-  p { margin: 0; max-width: 32rem; }
-</style>
-</head>
-<body>
-<h1>Rank and Rate</h1>
-<p>The site is being built. Dashboards will appear here.</p>
-<p><a href="/shift">Start shift</a></p>
-</body>
-</html>`;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -141,7 +125,32 @@ export function createApp(options: AppOptions = {}) {
     return expiresAt.toISOString();
   };
 
-  app.get('/', (c) => c.html(PAGE));
+  app.get('/', (c) => c.redirect('/live'));
+
+  // The live sort view, open to anyone with the link (D027, D035). Every viewer polls, so a copy
+  // is kept in this Worker for LIVE_CACHE_MS and the database is read at most that often (D120).
+  const liveCache = new Map<string, { at: number; panel: string }>();
+  const livePanelFor = async (db: D1Database, id: number | null): Promise<string | null> => {
+    const key = id === null ? 'current' : String(id);
+    const at = now();
+    const cached = liveCache.get(key);
+    if (cached && at.getTime() - cached.at < LIVE_CACHE_MS) return cached.panel;
+    const { open, latestFinished } = await recentSorts(db, pacificDate(at));
+    const pickedId = id ?? open[0]?.id ?? latestFinished?.id ?? null;
+    const sort = pickedId === null ? null : await loadLiveSort(db, pickedId);
+    if (id !== null && !sort) return null;
+    const panel = String(await livePanel({ sort, open, latestFinished, following: id === null, now: at }));
+    if (liveCache.size > 50) liveCache.clear();
+    liveCache.set(key, { at: at.getTime(), panel });
+    return panel;
+  };
+  const liveResponse = async (c: Context<{ Bindings: Env }>, panel: string | null) => {
+    c.header('Cache-Control', 'no-store');
+    if (panel === null) return c.redirect('/live');
+    return c.html(c.req.query('panel') === undefined ? livePage(panel) : panel);
+  };
+  app.get('/live', async (c) => liveResponse(c, await livePanelFor(c.env.DB, null)));
+  app.get('/live/:id{[0-9]+}', async (c) => liveResponse(c, await livePanelFor(c.env.DB, Number(c.req.param('id')))));
 
   // Used by the uptime monitor (D098): 200 only when the database answers.
   app.get('/api/health', async (c) => {
