@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { migrate, openDb, seed } from '../../db/lib.ts';
+import { AREA_PICKS } from '../dashboard/live-page.ts';
 import { summarize } from '../scoring/index.ts';
 import { sortSummary } from '../scoring/live.ts';
 import { inRange, periodRange } from '../scoring/periods.ts';
@@ -87,8 +88,8 @@ test('/sample shows all the areas, mid-sort by default, in the real live view, w
   assert.match(page, /<h1>Afternoon<\/h1>/);
   assert.equal([...page.matchAll(/<tr data-line="/g)].length, 27);
   assert.match(page, /As of 3:30 PM\./);
-  assert.match(page, /href="\/sample\/ps3">PS3<\/a>/);
-  assert.match(page, /href="\/sample\/pd14">PD14<\/a>/);
+  assert.match(page, /href="\/sample\/ps3\?sort=afternoon">PS3<\/a>/);
+  assert.match(page, /href="\/sample\/pd14\?sort=afternoon">PD14<\/a>/);
   assert.match(page, /href="\/live">Real site<\/a>/);
   assert.match(page, /data-stop="1"/); // the numbers cannot change, so it does not keep asking
   assert.ok(!page.includes('Refreshes every 30 seconds'));
@@ -98,7 +99,43 @@ test('mid-sort shows late lines, so people can see what that looks like', async 
   const page = await setup().text('/sample');
   assert.match(rowOf(page, 'PS5'), /class="pill late"/);
   assert.match(rowOf(page, 'PD9'), /class="pill late"/);
-  assert.match(page, /lines late/);
+  assert.ok(!/\d lines? late/.test(page));
+});
+
+test('the top 3 is on the sample too: its names are sample names, its lines link to their history, and the chart is gone', async () => {
+  const page = await setup().text('/sample');
+  const tops = [...page.matchAll(/<li data-top="([^"]+)"[\s\S]*?<\/li>/g)];
+  assert.equal(tops.length, 6);
+  for (const m of tops) {
+    assert.match(m[0], /<span class="who">Sample Supervisor \d\d<\/span>/);
+    assert.match(m[0], new RegExp(`href="/sample/${m[1].toLowerCase()}\\?sort=afternoon"`));
+  }
+  assert.ok(!page.includes('<svg'));
+});
+
+test('W-UNL and E-UNL are real PS lines, and together they are all of PS with no overlap (D126)', async () => {
+  const [west, east] = AREA_PICKS;
+  assert.equal(west.name, 'W-UNL');
+  assert.deepEqual(west.lines, ['PS1', 'PS3', 'PS5', 'PS7', 'PS9', 'PS11']);
+  assert.equal(east.name, 'E-UNL');
+  assert.deepEqual(east.lines, ['PS2', 'PS4', 'PS6', 'PS8', 'PS10', 'PS12', 'PS14']);
+  const ps = SAMPLE_LINES.filter((l) => l.type === 'PS').map((l) => l.id);
+  assert.deepEqual([...west.lines, ...east.lines].sort(), [...ps].sort());
+  assert.ok((await setup().text('/sample')).includes(JSON.stringify(AREA_PICKS)));
+});
+
+test('West Wing and East Wing are real PD lines, and together they are all of Wings with no overlap (D127)', () => {
+  const west = AREA_PICKS.find((p) => p.name === 'West Wing')!;
+  const east = AREA_PICKS.find((p) => p.name === 'East Wing')!;
+  assert.deepEqual(west.lines, ['PD6', 'PD7', 'PD8', 'PD9']);
+  assert.deepEqual(east.lines, ['PD10', 'PD11', 'PD12', 'PD13']);
+  const wings = SAMPLE_LINES.filter((l) => l.group === 'Wings').map((l) => l.id);
+  assert.deepEqual([...west.lines, ...east.lines].sort(), [...wings].sort());
+});
+
+test('a line opened from a sort opens on that sort', async () => {
+  const page = await setup().text('/sample/sort/twilight?at=20:00');
+  assert.match(page, /href="\/sample\/ps3\?sort=twilight">PS3<\/a>/);
 });
 
 test('the moments walk through the night, with the sorts overlapping and separate', async () => {
@@ -155,7 +192,6 @@ test('sample numbers are realistic when run through the real formulas', () => {
     for (const row of sampleLineHistory(line.id, TODAY)) {
       assert.ok(row.effectiveness !== null && row.effectiveness > 60 && row.effectiveness < 140, `${line.id} ${row.date} ${row.effectiveness}`);
       assert.ok(row.hours > 5 && row.hours < 90, `${line.id} ${row.date} hours ${row.hours}`);
-      assert.ok(row.onTime !== null && row.onTime >= 40 && row.onTime <= 100, `${line.id} ${row.date} on time ${row.onTime}`);
     }
   }
 });
@@ -188,13 +224,60 @@ test('/sample/ps3: the totals are the rows added up with the real period formula
   assert.match(page, /Unload · expected 550 PPH/);
   assert.match(page, /href="\/sample">All areas<\/a>/);
 
-  const rows = sampleLineHistory('PS3', TODAY);
+  const rows = sampleLineHistory('PS3', TODAY).filter((r) => r.sort === 'Afternoon');
   assert.equal([...page.matchAll(/<tr data-night="/g)].length, rows.length);
   const totals = summarize(rows.map((r) => ({ hours: r.hours, volume: r.volume, expectedPph: 550 })));
   assert.match(page, new RegExp(`<div class="value">${Math.round(totals.pph!).toLocaleString('en-US')}</div>`));
   assert.match(page, new RegExp(`<strong>${Math.round(totals.effectiveness!)}% effective</strong>`));
   assert.match(page, new RegExp(`<div class="value">${Math.round(totals.volume).toLocaleString('en-US')}</div>`));
-  assert.match(page, new RegExp(`${rows.length} sorts`));
+  assert.match(page, new RegExp(`${rows.length} nights`));
+});
+
+test('the sort selector: one sort at a time, with its own rows, totals and chart (D125)', async () => {
+  const t = setup();
+  const afternoon = await t.text('/sample/ps3');
+  assert.match(afternoon, /aria-label="Sort"/);
+  assert.match(afternoon, /aria-current="true">Afternoon</);
+  assert.match(afternoon, /href="\/sample\/ps3\?sort=twilight&amp;period=all-time">Twilight</);
+  assert.ok([...afternoon.matchAll(/<tr data-night="[^|]+\|([^"]+)"/g)].every((m) => m[1] === 'Afternoon'));
+  assert.match(afternoon, /swatch Afternoon/);
+  assert.ok(!afternoon.includes('swatch Twilight'));
+
+  const twilight = await t.text('/sample/ps3?sort=twilight');
+  assert.match(twilight, /aria-current="true">Twilight</);
+  const nights = [...twilight.matchAll(/<tr data-night="[^|]+\|([^"]+)"/g)];
+  const rows = sampleLineHistory('PS3', TODAY).filter((r) => r.sort === 'Twilight');
+  assert.equal(nights.length, rows.length);
+  assert.ok(nights.every((m) => m[1] === 'Twilight'));
+  assert.match(twilight, /swatch Twilight/);
+  const totals = summarize(rows.map((r) => ({ hours: r.hours, volume: r.volume, expectedPph: 550 })));
+  assert.match(twilight, new RegExp(`<div class="value">${Math.round(totals.volume).toLocaleString('en-US')}</div>`));
+  assert.notEqual(afternoon, twilight);
+
+  // Any case works, and anything else falls back to Afternoon.
+  assert.match(await t.text('/sample/ps3?sort=TWILIGHT'), /aria-current="true">Twilight</);
+  assert.match(await t.text('/sample/ps3?sort=nonsense'), /aria-current="true">Afternoon</);
+});
+
+test('the sort and the period each keep the other when changed', async () => {
+  const t = setup();
+  const lastWeek = await t.text('/sample/ps3?sort=twilight&period=last-week');
+  assert.match(lastWeek, /aria-current="page">Last week</);
+  assert.match(lastWeek, /aria-current="true">Twilight</);
+  assert.match(lastWeek, /href="\/sample\/ps3\?sort=afternoon&amp;period=last-week">Afternoon</);
+  assert.match(lastWeek, /href="\/sample\/ps3\?sort=twilight&amp;period=this-month">This month</);
+  assert.match(lastWeek, /<input type="hidden" name="sort" value="twilight">/);
+
+  const range = await t.text('/sample/ps3?sort=twilight&from=2026-10-05&to=2026-10-07');
+  assert.match(range, /href="\/sample\/ps3\?sort=afternoon&amp;from=2026-10-05&amp;to=2026-10-07">Afternoon</);
+  assert.ok([...range.matchAll(/<tr data-night="([^|]+)\|([^"]+)"/g)].every((m) => m[2] === 'Twilight' && m[1] >= '2026-10-05' && m[1] <= '2026-10-07'));
+});
+
+test('the history has no on-time, and its table runs in the same order as the grid (D123)', async () => {
+  const page = await setup().text('/sample/ps3');
+  assert.ok(!/on time/i.test(page));
+  const heads = [...page.match(/<thead>[\s\S]*?<\/thead>/)![0].matchAll(/<th[^>]*>([^<]*)<\/th>/g)].map((m) => m[1]);
+  assert.deepEqual(heads, ['Date', 'Supervisor', 'Hours', 'Volume', 'PPH', 'Effective', 'Over / under']);
 });
 
 test('/sample/pd3 and /sample/pd9 show their own group and expected PPH', async () => {
@@ -217,7 +300,7 @@ test('the period filters limit the rows, the totals and the chart', async () => 
   const t = setup();
   const lastWeek = await t.text('/sample/ps3?period=last-week');
   assert.match(lastWeek, /aria-current="page">Last week</);
-  const expected = sampleLineHistory('PS3', TODAY).filter((r) => inRange(r.date, periodRange('last-week', TODAY)));
+  const expected = sampleLineHistory('PS3', TODAY).filter((r) => r.sort === 'Afternoon' && inRange(r.date, periodRange('last-week', TODAY)));
   assert.equal([...lastWeek.matchAll(/<tr data-night="/g)].length, expected.length);
   for (const m of lastWeek.matchAll(/<tr data-night="([^|]+)\|/g)) assert.ok(m[1] >= '2026-10-19' && m[1] <= '2026-10-25', m[1]);
 
@@ -240,16 +323,14 @@ test('a custom date range works, either way round, and bad dates are ignored', a
 
 test('a period with no sorts says so', async () => {
   const page = await setup(new Date('2026-11-02T20:00:00Z')).text('/sample/ps3?period=this-week'); // a Monday, and tonight is left out
-  assert.match(page, /No sorts in this period/);
+  assert.match(page, /No Afternoon sorts in this period/);
   assert.ok(!page.includes('<svg'));
 });
 
-test('the history chart: a line per sort against expected, with one drawing per screen size', async () => {
-  const page = await setup().text('/sample/ps3');
+test('the history chart: the chosen sort against expected, with one drawing per screen size', async () => {
+  const page = await setup().text('/sample/ps3?sort=twilight');
   assert.equal((page.match(/<svg /g) ?? []).length, 2);
-  assert.match(page, /aria-label="Line chart of PPH each night from [^"]+ by sort, against an expected 550\."/);
-  assert.match(page, /swatch Afternoon/);
-  assert.match(page, /swatch Twilight/);
+  assert.match(page, /aria-label="Line chart of Twilight PPH each night from [^"]+, against an expected 550\."/);
   assert.match(page, /stroke-dasharray/);
 });
 

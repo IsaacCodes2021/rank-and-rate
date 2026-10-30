@@ -5,7 +5,7 @@ import { linePage } from '../dashboard/line-page.ts';
 import { livePage, livePanel } from '../dashboard/live-page.ts';
 import { isRealDate } from '../data/night.ts';
 import { inRange, isPeriodKey, periodRange, type DateRange, type PeriodKey } from '../scoring/periods.ts';
-import { DEFAULT_MOMENT, SAMPLE_LINES, SAMPLE_MOMENTS, isSampleTime, sampleLineHistory, sampleWorld, type SampleSort } from './world.ts';
+import { DEFAULT_MOMENT, SAMPLE_LINES, SAMPLE_MOMENTS, SAMPLE_SORTS, isSampleTime, sampleLineHistory, sampleWorld, type SampleSort } from './world.ts';
 
 const BANNER = raw('<p class="sample-banner" role="note"><strong>Sample data.</strong> These numbers and names are made up, and nothing here is saved.</p>');
 
@@ -24,7 +24,7 @@ export async function sampleOverview(today: string, atQuery: string | undefined,
       following: false,
       now: world.now,
       sortHref: (s) => `/sample/sort/${s.sort.toLowerCase()}?at=${at}`,
-      lineHref: (id) => `/sample/${id.toLowerCase()}`,
+      lineHref: (id) => `/sample/${id.toLowerCase()}?sort=${world.sort!.sort.toLowerCase()}`, // a line opens on the sort being looked at
       refreshes: false,
     }),
   );
@@ -48,16 +48,19 @@ function readRange(today: string, query: { period?: string; from?: string; to?: 
   return { period, range: filter, filter };
 }
 
-// /sample/ps3: one line's history. Null for anything that is not one of the 27 lines.
-export async function sampleLine(today: string, path: string, query: { period?: string; from?: string; to?: string }): Promise<string | null> {
+// /sample/ps3: one line's history on one sort, Afternoon unless another is picked (D125). Null for anything that is not one of the 27 lines.
+export async function sampleLine(today: string, path: string, query: { sort?: string; period?: string; from?: string; to?: string }): Promise<string | null> {
   const line = SAMPLE_LINES.find((l) => l.id === path.toUpperCase());
   if (!line) return null;
   const { period, range, filter } = readRange(today, query);
-  const rows = sampleLineHistory(line.id, today).filter((r) => inRange(r.date, filter));
+  const sort = SAMPLE_SORTS.find((s) => s.toLowerCase() === query.sort?.toLowerCase()) ?? SAMPLE_SORTS[0];
+  const rows = sampleLineHistory(line.id, today).filter((r) => r.sort === sort && inRange(r.date, filter));
   return String(
     await linePage({
       line,
       rows,
+      sort,
+      sorts: SAMPLE_SORTS,
       period,
       range,
       today,

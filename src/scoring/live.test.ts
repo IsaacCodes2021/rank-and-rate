@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { round, type Entry } from './index.ts';
-import { lastClosedSlot, lineNumbers, runningSeries, sortSummary, type LiveLineInput } from './live.ts';
+import { lastClosedSlot, lineNumbers, sortSummary, topLines, type LiveLineInput } from './live.ts';
 
 const QUARTER = 15 * 60 * 1000;
 const atSlot = (slot: number) => slot * QUARTER;
@@ -25,7 +25,6 @@ test('a line: worked numbers for PPH, effectiveness, plan hours and over/under',
   assert.equal(round(n.effectiveness, 2), 145.45);
   assert.equal(round(n.planHours, 2), 4.36);
   assert.equal(round(n.overUnder, 2), -1.36);
-  assert.equal(n.onTime, 100);
   assert.equal(n.lastSlot, 101);
   assert.equal(n.late, false);
 });
@@ -55,19 +54,6 @@ test('a line someone picked but never updated goes late; a line nobody picked do
 test('a line with its final is never late, and a finished sort has no late lines', () => {
   assert.equal(lineNumbers(line('PS1', 'PS', 550, [update(100, 6, 1200), finalAt(105, 5000)]), atSlot(200)).late, false);
   assert.equal(lineNumbers(line('PS1', 'PS', 550, [update(100, 6, 1200)]), atSlot(200), false).late, false);
-});
-
-test('on-time counts real updates: skipped quarter hours count against it even though their hours carry', () => {
-  const entries = [update(100, 6, 100), update(103, 6, 400)];
-  const n = lineNumbers(line('PS1', 'PS', 550, entries), atSlot(103));
-  assert.equal(n.hours, 6); // 4 quarter hours x 6 x 0.25
-  assert.equal(n.onTime, 50); // 2 updates in 4 quarter hours
-});
-
-test('on-time stops at the final, which covers its own quarter hour', () => {
-  // Updates at 100 and 101, final at 104: 102 and 103 were missed, so 2 of 4.
-  const n = lineNumbers(line('PS1', 'PS', 550, [update(100, 6, 100), update(101, 6, 200), finalAt(104, 500)]), atSlot(200));
-  assert.equal(n.onTime, 50);
 });
 
 test('PS and PD totals: added up first, then the ratios, with PD expected weighted by volume (D105)', () => {
@@ -109,34 +95,37 @@ test('no entries at all: no totals to show, and nothing crashes', () => {
   assert.equal(s.PS.effectiveness, null);
   assert.equal(s.PS.expectedPph, null);
   assert.equal(s.volume, 0);
-  assert.deepEqual(runningSeries([line('PS1', 'PS', 550, [])]), []);
 });
 
-test('the chart: each type at each quarter hour, with worked numbers', () => {
+const rankOf = (lines: LiveLineInput[], type: 'PS' | 'PD') => {
+  const s = sortSummary(lines, atSlot(100), true, null, null);
+  return topLines(lines, s.numbers, type).map((l) => l.id);
+};
+
+test('the ranking goes by effectiveness, not PPH, so North and Wings compare fairly (D010)', () => {
   const lines = [
-    line('PS1', 'PS', 550, [update(100, 4, 500), update(101, 4, 1000)]), // 1 h 500, 2 h 1,000
-    line('PS2', 'PS', 550, [update(101, 8, 1100)]), // 2 h 1,100 from 101
-    line('PD1', 'PD', 275, [update(100, 2, 150)]), // 0.5 h 150
+    line('PD1', 'PD', 275, [update(100, 4, 300)]), // 1 hour: 300 PPH, 109% of 275
+    line('PD6', 'PD', 350, [update(100, 4, 340)]), // 1 hour: 340 PPH, 97% of 350
   ];
-  assert.deepEqual(runningSeries(lines), [
-    { slot: 100, ps: 500, psExpected: 550, pd: 300, pdExpected: 275 },
-    { slot: 101, ps: 525, psExpected: 550, pd: 300, pdExpected: 275 }, // 2,100 / 4 hours; PD1 stays as of its last report
-  ]);
+  assert.deepEqual(rankOf(lines, 'PD'), ['PD1', 'PD6']);
 });
 
-test('the chart: a skipped update does not spike the line, because volume and hours stop together', () => {
-  const lines = [line('PS1', 'PS', 550, [update(100, 8, 1000), update(103, 8, 4000)])];
-  // 100: 1,000 / 2. 101 and 102 hold at the same report. 103: 4,000 / 8 hours, with the skipped hours carried.
-  assert.deepEqual(runningSeries(lines).map((p) => p.ps), [500, 500, 500, 500]);
+test('the ranking keeps the top 3 of one type, leaves out lines with no numbers, and breaks a tie on volume', () => {
+  const lines = [
+    line('PS1', 'PS', 550, [update(100, 4, 400)]), // 400 PPH
+    line('PS2', 'PS', 550, [update(100, 4, 600)]), // 600 PPH
+    line('PS3', 'PS', 550, [update(100, 4, 500)]), // 500 PPH, tied with PS4 on a smaller volume
+    line('PS4', 'PS', 550, [update(100, 8, 1000)]), // 500 PPH
+    line('PS5', 'PS', 550, [], 100), // picked, with no numbers yet
+    line('PD1', 'PD', 275, [update(100, 4, 900)]), // the other type, and higher than all of them
+  ];
+  assert.deepEqual(rankOf(lines, 'PS'), ['PS2', 'PS4', 'PS3']);
+  assert.deepEqual(rankOf(lines, 'PD'), ['PD1']);
+  assert.deepEqual(rankOf([line('PS5', 'PS', 550, [], 100)], 'PS'), []);
 });
 
-test('the chart: a final joins at its own quarter hour and extends the line to it', () => {
-  const lines = [line('PS1', 'PS', 550, [update(100, 8, 1000), finalAt(103, 4000)])];
-  // 8 x 0.25 x 4 quarter hours = 8 hours at the final; 4,000 / 8 = 500.
-  assert.deepEqual(runningSeries(lines).map((p) => p.ps), [500, 500, 500, 500]);
-});
-
-test('the chart: admin totals with no updates appear as one point at the time they were saved', () => {
-  const points = runningSeries([line('PS1', 'PS', 550, [finalAt(100, 5500, 10)]), line('PD1', 'PD', 275, [finalAt(100, 2750, 10)])]);
-  assert.deepEqual(points, [{ slot: 100, ps: 550, psExpected: 550, pd: 275, pdExpected: 275 }]);
+test('the ranking leaves the list it was given in order', () => {
+  const lines = [line('PS1', 'PS', 550, [update(100, 4, 400)]), line('PS2', 'PS', 550, [update(100, 4, 600)])];
+  rankOf(lines, 'PS');
+  assert.deepEqual(lines.map((l) => l.id), ['PS1', 'PS2']);
 });

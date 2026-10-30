@@ -11,7 +11,6 @@ const LOCAL_HOUR = new Intl.DateTimeFormat('en-US', { hour: 'numeric', hourCycle
 
 export const clock = (ms: number) => TIME.format(ms);
 export const clockOf = (iso: string) => clock(Date.parse(iso));
-export const shortClock = (ms: number) => clock(ms).replace(/\s*[AP]M$/, '');
 export const count = (n: number) => WHOLE.format(Math.round(n));
 export const oneDecimal = (n: number) => TENTHS.format(Math.round(n * 10) / 10);
 export const shortDay = (date: string) => SHORT_DAY.format(Date.parse(`${date}T12:00:00Z`));

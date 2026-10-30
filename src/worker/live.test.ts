@@ -76,7 +76,7 @@ test('with nothing running it says so, and offers to pick up the next sort', asy
   assert.match(page, /picks up the next sort by itself/);
 });
 
-test('a running sort: totals, on-time, and every line, with worked numbers', async () => {
+test('a running sort: totals and every line, with worked numbers', async () => {
   const t = await setup();
   const pat = await t.join('Pat Sample');
   const sam = await t.join('Sam Sample');
@@ -112,31 +112,48 @@ test('a running sort: totals, on-time, and every line, with worked numbers', asy
   // PD: 300 / 1 hour. Plan 300 / 275 = 1.09 hours: 0.1 hours under plan.
   assert.match(page, /PD \(load\) PPH<\/div>\s*<div class="value">300<\/div>/);
   assert.match(page, /0\.1 hrs under plan/);
-  assert.match(page, /<div class="value">3<small> \/ 3<\/small><\/div>/);
-  assert.match(page, /None late/);
   assert.match(page, /<div class="value">1,800<\/div>/);
   assert.match(page, /4\.0 hours worked/);
 });
 
-test('a line that stops updating shows as late, on the line and in the totals', async () => {
+test('a line that stops updating shows its last update time in red, with no other late marker (D123)', async () => {
   const t = await setup();
   const pat = await t.join('Pat Sample');
-  const id = await t.start(pat, 'Afternoon', ['PS1', 'PS2']);
+  const id = await t.start(pat, 'Afternoon', ['PS1', 'PS2', 'PS3']);
   t.setNow(at('13:15'));
   await t.update(pat, id, [{ lineId: 'PS1', headcount: 8, volume: 1300 }, { lineId: 'PS2', headcount: 8, volume: 1300 }]);
   t.setNow(at('13:30'));
   await t.update(pat, id, [{ lineId: 'PS1', headcount: 8, volume: 2600 }]);
 
   t.setNow(at('13:36')); // the 1:30 window is still open, so nothing is late yet
-  assert.ok(!(await t.text('/live')).includes('class="pill late"'));
+  assert.ok(!rowOf(await t.text('/live'), 'PS2').includes('class="pill late"'));
 
   t.setNow(at('13:40')); // it has closed
   const page = await t.text('/live');
-  assert.match(rowOf(page, 'PS2'), /<span class="pill late">Late · 1:15 PM<\/span>/);
+  assert.match(rowOf(page, 'PS2'), /<span class="pill late"><span class="sr-only">Late, last update <\/span>1:15 PM<\/span>/);
+  assert.match(rowOf(page, 'PS3'), /<span class="pill late"><span class="sr-only">Late, last update <\/span>No update yet<\/span>/); // picked, never updated
   assert.ok(!rowOf(page, 'PS1').includes('pill late'));
-  assert.match(page, /<div class="value">1<small> \/ 2<\/small><\/div>/);
-  assert.match(page, /1 line late/);
-  assert.match(page, /1 running|2 running/);
+  assert.match(page, /\.pill\.late \{ background: #fdecec; color: #a11616; \}/);
+  assert.match(page, /3 running<span class="shown"><\/span>/);
+  assert.ok(!page.includes('Lines updated on time'));
+  assert.ok(!/\d lines? late/.test(page));
+  assert.ok(!/\d late</.test(page));
+});
+
+test('the grid runs line, supervisor, hours, volume, PPH, effective, last update, with no on-time', async () => {
+  const t = await setup();
+  const pat = await t.join('Pat Sample');
+  const id = await t.start(pat, 'Afternoon', ['PS1']);
+  t.setNow(at('13:15'));
+  await t.update(pat, id, [{ lineId: 'PS1', headcount: 8, volume: 1300 }]);
+  const page = await t.text('/live');
+
+  const heads = [...page.match(/<thead>[\s\S]*?<\/thead>/)![0].matchAll(/<th[^>]*>([^<]*)<\/th>/g)].map((m) => m[1]);
+  assert.deepEqual(heads, ['Line', 'Supervisor', 'Hours', 'Volume', 'PPH', 'Effective', 'Last update']);
+
+  const cells = [...rowOf(page, 'PS1').matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((m) => m[1].replace(/<[^>]+>/g, '').trim());
+  assert.deepEqual(cells.slice(0, 7), ['PS1', 'Pat Sample', '2.0', '1,300', '650', '118%', '1:15 PM']);
+  assert.ok(!/on time/i.test(page));
 });
 
 test('sorts never mix: overlapping sorts each get their own view, even on the same line', async () => {
@@ -225,33 +242,76 @@ test('each sort has its own shared copy', async () => {
   assert.match(await (await t.get(`/live/${twilight}`)).text(), /<h1>Twilight<\/h1>/);
 });
 
-test('the chart: PS and PD against expected, with a readable table twin', async () => {
+const topOf = (page: string, type: string) => {
+  const m = page.match(new RegExp(`aria-label="Top 3 ${type} lines">[\\s\\S]*?</section>`));
+  assert.ok(m, `no top 3 for ${type}`);
+  return m[0];
+};
+const topIds = (page: string, type: string) => [...topOf(page, type).matchAll(/data-top="([^"]+)"/g)].map((r) => r[1]);
+
+test('the live ranking replaces the chart: the top 3 PS and top 3 PD by effectiveness (D122)', async () => {
   const t = await setup();
   const pat = await t.join('Pat Sample');
-  const id = await t.start(pat, 'Afternoon', ['PS1', 'PD1']);
+  const id = await t.start(pat, 'Afternoon', ['PS1', 'PS2', 'PS3', 'PS4', 'PD1', 'PD6']);
   t.setNow(at('13:15'));
-  await t.update(pat, id, [{ lineId: 'PS1', headcount: 8, volume: 1300 }, { lineId: 'PD1', headcount: 4, volume: 300 }]);
-  t.setNow(at('13:30'));
-  await t.update(pat, id, [{ lineId: 'PS1', headcount: 8, volume: 2400 }, { lineId: 'PD1', headcount: 4, volume: 700 }]);
-
+  await t.update(pat, id, [
+    { lineId: 'PS1', headcount: 4, volume: 400 }, // 400 PPH
+    { lineId: 'PS2', headcount: 4, volume: 600 }, // 600 PPH
+    { lineId: 'PS3', headcount: 4, volume: 500 }, // 500 PPH
+    { lineId: 'PS4', headcount: 4, volume: 300 }, // 300 PPH: fourth, so off the list
+    { lineId: 'PD1', headcount: 4, volume: 300 }, // 300 PPH, 109% of North's 275
+    { lineId: 'PD6', headcount: 4, volume: 340 }, // 340 PPH, 97% of Wings' 350: more PPH, lower rank
+  ]);
   const page = await t.text('/live');
-  assert.equal((page.match(/<svg /g) ?? []).length, 2); // one drawing for a desktop, one for a phone
-  assert.match(page, /role="img" aria-label="Line chart of running PPH from 1:15 PM to 1:30 PM\. PS is at 600\. PD is at 350\."/);
-  assert.match(page, /tabindex="0"/);
-  assert.match(page, /stroke-dasharray/); // expected
-  assert.match(page, /Show these numbers as a table/);
-  assert.match(page, /<td>1:15 PM<\/td><td class="num">650<\/td><td class="num">550<\/td><td class="num">300<\/td><td class="num">275<\/td>/);
-  assert.match(page, /<td>1:30 PM<\/td><td class="num">600<\/td><td class="num">550<\/td><td class="num">350<\/td><td class="num">275<\/td>/);
+
+  assert.deepEqual(topIds(page, 'PS'), ['PS2', 'PS3', 'PS1']);
+  assert.deepEqual(topIds(page, 'PD'), ['PD1', 'PD6']);
+  const first = topOf(page, 'PS');
+  assert.match(first, /<li data-top="PS2"[^>]*><span class="rank">1<\/span><span class="top-line">PS2<\/span><span class="who">Pat Sample<\/span><span class="top-eff">109%<\/span><span class="top-pph">600 PPH<\/span>/);
+  assert.match(first, /By effectiveness/);
+
+  assert.ok(!page.includes('<svg'));
+  assert.ok(!page.includes('PPH through the sort'));
+  assert.ok(!page.includes('Show these numbers as a table'));
 });
 
-test('before any update there is no chart, and lines someone picked say so', async () => {
+test('before any update the ranking says so, and lines someone picked say so too', async () => {
   const t = await setup();
   const pat = await t.join('Pat Sample');
   await t.start(pat, 'Afternoon', ['PS1']);
   const page = await t.text('/live');
-  assert.match(page, /The chart starts with the first update/);
-  assert.ok(!page.includes('<svg'));
+  assert.match(topOf(page, 'PS'), /No numbers yet/);
+  assert.match(topOf(page, 'PD'), /No numbers yet/);
   assert.match(rowOf(page, 'PS1'), /No update yet/);
+});
+
+test('a ranked name is made safe for the page', async () => {
+  const t = await setup();
+  const pat = await t.join('<b>Pat</b>');
+  const id = await t.start(pat, 'Afternoon', ['PS1']);
+  t.setNow(at('13:15'));
+  await t.update(pat, id, [{ lineId: 'PS1', headcount: 4, volume: 400 }]);
+  const top = topOf(await t.text('/live'), 'PS');
+  assert.ok(!top.includes('<b>Pat'));
+  assert.match(top, /&lt;b&gt;Pat&lt;\/b&gt;/);
+});
+
+test('the area filter has what it needs: every row names its line, type and group, and the panel holds its place (D124)', async () => {
+  const t = await setup();
+  const pat = await t.join('Pat Sample');
+  await t.start(pat, 'Afternoon', ['PS1']);
+  const page = await t.text('/live');
+  assert.match(page, /<tr data-line="PS3" data-type="PS" data-group="Unload"/);
+  assert.match(page, /<tr data-line="PD3" data-type="PD" data-group="North"/);
+  assert.match(page, /<tr data-line="PD9" data-type="PD" data-group="Wings"/);
+  assert.match(page, /<div id="areas-slot"><\/div>/);
+  assert.match(page, /<p id="areas-none" class="sub" hidden>/);
+  assert.match(page, /rr_areas/);
+
+  // A refresh brings the slot back, without the script.
+  const panel = await t.text('/live?panel=1');
+  assert.match(panel, /<div id="areas-slot"><\/div>/);
+  assert.ok(!panel.includes('<script'));
 });
 
 test("the admin's end-of-night totals show as a finished sort", async () => {

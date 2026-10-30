@@ -22,7 +22,7 @@ test('fake live sorts: two open sorts that overlap on the same lines, one with l
   const afternoon = (await loadLiveSort(db, open[1].id))!;
   const a = sortSummary(afternoon.lines, NOW, true, Date.parse(afternoon.startsAt!), null);
   assert.equal(a.linesInPlay, 25); // PS14 and PD13 have nobody on them
-  assert.equal(a.linesLate, 2);
+  assert.equal([...a.numbers.values()].filter((n) => n.late).length, 2);
   assert.equal([...a.numbers.values()].filter((n) => n.hasFinal).length, 9);
   assert.ok(a.PS.effectiveness! > 70 && a.PS.effectiveness! < 130, `PS ${a.PS.effectiveness}`);
   assert.ok(a.PD.effectiveness! > 70 && a.PD.effectiveness! < 130, `PD ${a.PD.effectiveness}`);
@@ -30,7 +30,7 @@ test('fake live sorts: two open sorts that overlap on the same lines, one with l
   const twilight = (await loadLiveSort(db, open[0].id))!;
   const t = sortSummary(twilight.lines, NOW, true, Date.parse(twilight.startsAt!), null);
   assert.equal(t.linesInPlay, 7);
-  assert.equal(t.linesLate, 0);
+  assert.equal([...t.numbers.values()].filter((n) => n.late).length, 0);
   assert.ok(t.volume < a.volume / 5);
 });
 

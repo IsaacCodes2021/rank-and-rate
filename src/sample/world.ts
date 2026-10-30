@@ -121,7 +121,7 @@ function fullNight(line: SampleLine, index: number, date: string, sort: SampleSo
 
 // What a line looks like at a moment in the night, as the live view would read it.
 function asOf(line: SampleLine, night: Night | null, throughMs: number): LiveLine {
-  const empty: LiveLine = { id: line.id, type: line.type, expectedPph: line.expectedPph, entries: [], assignedSlot: null, supervisors: [], lastAt: null };
+  const empty: LiveLine = { id: line.id, type: line.type, group: line.group, expectedPph: line.expectedPph, entries: [], assignedSlot: null, supervisors: [], lastAt: null };
   if (!night || night.assignedMs > throughMs) return empty;
   const updates = night.updates.filter((u) => u.atMs <= throughMs);
   const entries: Entry[] = updates.map((u) => ({ kind: 'interval', slot: u.slot, headcount: u.headcount, runningVolume: u.volume, totalHours: null, atMs: null }));
@@ -197,8 +197,6 @@ export type LineNightRow = {
   pph: number | null;
   effectiveness: number | null;
   overUnder: number | null;
-  onTime: number | null;
-  onTimeParts: { hit: number; due: number } | null;
 };
 
 function weekdaysBefore(today: string, count: number): string[] {
@@ -233,8 +231,6 @@ export function sampleLineHistory(lineId: string, today: string, nights = 40): L
         pph: n.pph,
         effectiveness: n.effectiveness,
         overUnder: n.overUnder,
-        onTime: n.onTime,
-        onTimeParts: n.onTimeParts,
       });
     }
   }

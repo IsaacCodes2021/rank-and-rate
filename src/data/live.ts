@@ -1,11 +1,11 @@
-// What the live sort view reads (D027, D035): open to anyone with the link, so it reads only what
+// What the live sort view reads (D035, D122): open to anyone with the link, so it reads only what
 // the screens show, and never a PIN hash. One sort at a time, so sorts cannot mix (D115).
 import { expectedPph, quarterHourSlot, type Entry } from '../scoring/index.ts';
 import type { LineType, LiveLineInput } from '../scoring/live.ts';
 
 export type SortRef = { id: number; date: string; sort: string; status: 'open' | 'final' };
 
-export type LiveLine = LiveLineInput & { supervisors: string[]; lastAt: string | null };
+export type LiveLine = LiveLineInput & { group: string; supervisors: string[]; lastAt: string | null };
 
 export type LiveSort = SortRef & {
   startsAt: string | null;
@@ -83,6 +83,7 @@ export async function loadLiveSort(db: D1Database, shiftId: number): Promise<Liv
     return {
       id: l.id,
       type: l.type,
+      group: l.grp,
       expectedPph: expectedPph({ group: l.grp, expectedPphOverride: l.expected_pph_override }, settings),
       entries: rows.map((r) => ({
         kind: r.kind,

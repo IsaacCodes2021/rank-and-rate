@@ -1,13 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { clock, clockOf, count, longDay, oneDecimal, pacificOffsetHours, shortClock, shortDay } from './format.ts';
+import { clock, clockOf, count, longDay, oneDecimal, pacificOffsetHours, shortDay } from './format.ts';
 
 test('times are the building time, on both sides of the clock change', () => {
   assert.equal(clock(Date.parse('2026-10-30T20:15:00Z')), '1:15 PM'); // PDT
   assert.equal(clock(Date.parse('2026-11-02T21:15:00Z')), '1:15 PM'); // PST
   assert.equal(clockOf('2026-10-31T01:05:00Z'), '6:05 PM');
-  assert.equal(shortClock(Date.parse('2026-10-30T20:15:00Z')), '1:15');
-  assert.equal(shortClock(Date.parse('2026-10-30T17:00:00Z')), '10:00');
 });
 
 test('numbers are whole with commas, or to one place', () => {

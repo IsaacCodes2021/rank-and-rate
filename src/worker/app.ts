@@ -176,7 +176,7 @@ export function createApp(options: AppOptions = {}) {
   });
   app.get('/sample/:line', (c) => {
     const today = pacificDate(now());
-    return sampleResponse(c, today, () => sampleLine(today, c.req.param('line'), { period: c.req.query('period'), from: c.req.query('from'), to: c.req.query('to') }));
+    return sampleResponse(c, today, () => sampleLine(today, c.req.param('line'), { sort: c.req.query('sort'), period: c.req.query('period'), from: c.req.query('from'), to: c.req.query('to') }));
   });
 
   // Used by the uptime monitor (D098): 200 only when the database answers.
