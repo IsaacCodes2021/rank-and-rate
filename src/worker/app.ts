@@ -136,11 +136,11 @@ export function createApp(options: AppOptions = {}) {
     const at = now();
     const cached = liveCache.get(key);
     if (cached && at.getTime() - cached.at < LIVE_CACHE_MS) return cached.panel;
-    const { open, latestFinished } = await recentSorts(db, pacificDate(at));
-    const pickedId = id ?? open[0]?.id ?? latestFinished?.id ?? null;
+    const { open, finished } = await recentSorts(db, pacificDate(at));
+    const pickedId = id ?? open[0]?.id ?? finished[0]?.id ?? null;
     const sort = pickedId === null ? null : await loadLiveSort(db, pickedId);
     if (id !== null && !sort) return null;
-    const panel = String(await livePanel({ sort, open, latestFinished, following: id === null, now: at }));
+    const panel = String(await livePanel({ sort, open, finished, following: id === null, now: at }));
     if (liveCache.size > 50) liveCache.clear();
     liveCache.set(key, { at: at.getTime(), panel });
     return panel;

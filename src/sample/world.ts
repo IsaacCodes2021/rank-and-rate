@@ -168,7 +168,7 @@ export type SampleWorld = {
   now: Date;
   sort: LiveSort | null;
   open: SortRef[];
-  latestFinished: SortRef | null;
+  finished: SortRef[];
 };
 
 const refOf = (s: LiveSort): SortRef => ({ id: s.id, date: s.date, sort: s.sort, status: s.status });
@@ -184,7 +184,7 @@ export function sampleWorld(today: string, at: string, pick?: SampleSort): Sampl
     now,
     sort: picked ?? open[0] ?? finished[0] ?? null,
     open: open.map(refOf),
-    latestFinished: finished.length ? refOf(finished[0]) : null,
+    finished: finished.map(refOf),
   };
 }
 

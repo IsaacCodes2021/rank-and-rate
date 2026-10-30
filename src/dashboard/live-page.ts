@@ -124,7 +124,11 @@ function typeTile(type: 'PS' | 'PD', name: string, t: TypeTotals) {
 
 function updatedCell(line: LiveLine, n: LineNumbers) {
   if (!n.inPlay) return html`<span class="idle">No one on it</span>`;
-  if (n.hasFinal) return html`<span class="pill final">Final${line.lastAt ? html` · ${clockOf(line.lastAt)}` : ''}</span>`;
+  if (n.hasFinal) {
+    // Totals typed in afterwards carry when they were typed, not when the sort ended.
+    const typed = line.entries.some((e) => e.kind === 'final' && e.totalHours !== null);
+    return html`<span class="pill final">Final${line.lastAt && !typed ? html` · ${clockOf(line.lastAt)}` : ''}</span>`;
+  }
   if (n.late) return html`<span class="pill late"><span class="sr-only">Late, last update </span>${line.lastAt ? clockOf(line.lastAt) : 'No update yet'}</span>`;
   return line.lastAt ? clockOf(line.lastAt) : html`<span class="idle">No update yet</span>`;
 }
@@ -145,9 +149,9 @@ function lineRow(line: LiveLine, n: LineNumbers, lineHref?: (id: string) => stri
 </tr>`;
 }
 
-function lineList(type: 'PS' | 'PD', title: string, lines: LiveLine[], numbers: Map<string, LineNumbers>, totals: TypeTotals, lineHref?: (id: string) => string) {
+function lineList(type: 'PS' | 'PD', title: string, lines: LiveLine[], numbers: Map<string, LineNumbers>, totals: TypeTotals, running: boolean, lineHref?: (id: string) => string) {
   return html`<section class="card list" aria-label="${title}">
-<div class="list-head"><h2><i class="swatch ${type}"></i>${title}</h2><p class="sub">${totals.linesInPlay} running<span class="shown"></span></p></div>
+<div class="list-head"><h2><i class="swatch ${type}"></i>${title}</h2><p class="sub">${totals.linesInPlay} ${running ? 'running' : totals.linesInPlay === 1 ? 'line' : 'lines'}<span class="shown"></span></p></div>
 <table>
 <thead><tr><th>Line</th><th class="hide-narrow">Supervisor</th><th class="num hide-narrow">Hours</th><th class="num hide-narrow">Volume</th><th class="num">PPH</th><th>Effective</th><th>Last update</th></tr></thead>
 <tbody>${lines.map((l) => lineRow(l, numbers.get(l.id)!, lineHref))}</tbody>
@@ -171,8 +175,8 @@ ${
 </section>`;
 }
 
-const sortTabs = (open: SortRef[], latestFinished: SortRef | null, currentId: number | null, followingCurrent: boolean, sortHref: (s: SortRef) => string) => {
-  const shown = latestFinished && !open.some((s) => s.id === latestFinished.id) ? [...open, latestFinished] : open;
+const sortTabs = (open: SortRef[], finished: SortRef[], currentId: number | null, followingCurrent: boolean, sortHref: (s: SortRef) => string) => {
+  const shown = [...open, ...finished];
   if (shown.length < 2 && !(shown.length === 1 && shown[0].id !== currentId)) return '';
   return html`<nav class="sorts" aria-label="Sorts">${shown.map(
     (s) => html`<a href="${sortHref(s)}"${s.id === currentId && !followingCurrent ? raw(' aria-current="page"') : s.id === currentId ? raw(' aria-current="true"') : ''}>${s.sort}${s.status === 'final' ? ' (finished)' : ''}</a>`,
@@ -182,7 +186,7 @@ const sortTabs = (open: SortRef[], latestFinished: SortRef | null, currentId: nu
 export type PanelInput = {
   sort: LiveSort | null;
   open: SortRef[];
-  latestFinished: SortRef | null;
+  finished: SortRef[]; // the latest day's finished sorts
   following: boolean; // on /live, which moves on to the next sort by itself
   now: Date;
   sortHref?: (s: SortRef) => string;
@@ -191,7 +195,7 @@ export type PanelInput = {
 };
 
 // Everything that refreshes. data-stop tells the script a finished sort has nothing more to fetch.
-export function livePanel({ sort, open, latestFinished, following, now, sortHref = (s) => `/live/${s.id}`, lineHref, refreshes = true }: PanelInput) {
+export function livePanel({ sort, open, finished, following, now, sortHref = (s) => `/live/${s.id}`, lineHref, refreshes = true }: PanelInput) {
   const nowMs = now.getTime();
   if (!sort) {
     return html`<span data-stop="0"></span>
@@ -205,14 +209,14 @@ export function livePanel({ sort, open, latestFinished, following, now, sortHref
   const nextDue = clock((quarterHourSlot(nowMs) + 1) * QUARTER_MS);
   const psLines = sort.lines.filter((l) => l.type === 'PS');
   const pdLines = sort.lines.filter((l) => l.type === 'PD');
-  const when = [longDay(sort.date), startMs === null ? 'no updates yet' : `started ${clock(startMs)}`, running ? `next update due ${nextDue}` : endMs === null ? 'finished' : `finished ${clock(endMs)}`];
+  const when = [longDay(sort.date), startMs !== null ? `started ${clock(startMs)}` : running ? 'no updates yet' : '', running ? `next update due ${nextDue}` : endMs === null ? 'finished' : `finished ${clock(endMs)}`];
   return html`<span data-stop="${!refreshes || (!running && !following) ? '1' : '0'}"></span>
-<div class="heading"><h1>${sort.sort}</h1><p class="sub">${when.join(' · ')}</p></div>
-${sortTabs(open, latestFinished, sort.id, following, sortHref)}
+<div class="heading"><h1>${sort.sort}</h1><p class="sub">${when.filter(Boolean).join(' · ')}</p></div>
+${sortTabs(open, finished, sort.id, following, sortHref)}
 <section class="tiles" aria-label="Sort totals">
 ${typeTile('PS', 'PS (unload)', s.PS)}
 ${typeTile('PD', 'PD (load)', s.PD)}
-<div class="card tile"><div class="label">Volume so far</div>
+<div class="card tile"><div class="label">${running ? 'Volume so far' : 'Volume'}</div>
 <div class="value">${count(s.volume)}</div>
 <div class="detail">${oneDecimal(s.hours)} hours worked</div>
 <div class="detail">${s.flowPerHour === null ? '' : `${count(s.flowPerHour)} pieces per hour of sort`}</div></div>
@@ -224,8 +228,8 @@ ${topCard('PD', pdLines, s.numbers, lineHref)}
 <div id="areas-slot"></div>
 <p id="areas-none" class="sub" hidden>No areas picked. Open Filter areas and pick at least one.</p>
 <div class="lists">
-${lineList('PS', 'PS lines', psLines, s.numbers, s.PS, lineHref)}
-${lineList('PD', 'PD lines', pdLines, s.numbers, s.PD, lineHref)}
+${lineList('PS', 'PS lines', psLines, s.numbers, s.PS, running, lineHref)}
+${lineList('PD', 'PD lines', pdLines, s.numbers, s.PD, running, lineHref)}
 </div>
 <p class="foot">${refreshes ? html`Updated ${clock(nowMs)}.${running || following ? ' Refreshes every 30 seconds.' : ''}` : html`As of ${clock(nowMs)}.`}</p>`;
 }

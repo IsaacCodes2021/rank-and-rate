@@ -13,9 +13,10 @@ export type LiveSort = SortRef & {
   lines: LiveLine[];
 };
 
-// Open sorts with something on them, newest first, then the latest finished one. A sort somebody
-// forgot to close stops showing as running after two days.
-export async function recentSorts(db: D1Database, today: string): Promise<{ open: SortRef[]; latestFinished: SortRef | null }> {
+// Open sorts with something on them, newest first, then every finished sort on the latest day that
+// has one, so a day's sorts are one tap apart (D128). A sort somebody forgot to close stops showing
+// as running after two days.
+export async function recentSorts(db: D1Database, today: string): Promise<{ open: SortRef[]; finished: SortRef[] }> {
   const since = new Date(Date.parse(`${today}T12:00:00Z`) - 2 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   const open = await db
     .prepare(
@@ -26,14 +27,15 @@ export async function recentSorts(db: D1Database, today: string): Promise<{ open
     )
     .bind(since)
     .all<SortRef>();
-  const latestFinished = await db
+  const finished = await db
     .prepare(
       `SELECT s.id, s.date, s.sort, s.status FROM shift s
         WHERE s.status = 'final' AND EXISTS (SELECT 1 FROM entry e WHERE e.shift_id = s.id)
-        ORDER BY s.date DESC, s.ends_at DESC, s.id DESC LIMIT 1`,
+          AND s.date = (SELECT max(d.date) FROM shift d WHERE d.status = 'final' AND EXISTS (SELECT 1 FROM entry e WHERE e.shift_id = d.id))
+        ORDER BY s.ends_at DESC, s.id DESC`,
     )
-    .first<SortRef>();
-  return { open: open.results, latestFinished };
+    .all<SortRef>();
+  return { open: open.results, finished: finished.results };
 }
 
 type LineRow = { id: string; type: LineType; grp: string; expected_pph_override: number | null };

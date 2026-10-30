@@ -20,7 +20,7 @@ export async function sampleOverview(today: string, atQuery: string | undefined,
     await livePanel({
       sort: world.sort,
       open: world.open,
-      latestFinished: world.latestFinished,
+      finished: world.finished,
       following: false,
       now: world.now,
       sortHref: (s) => `/sample/sort/${s.sort.toLowerCase()}?at=${at}`,

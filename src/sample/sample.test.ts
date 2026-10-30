@@ -143,7 +143,7 @@ test('the moments walk through the night, with the sorts overlapping and separat
   const start = sampleWorld(TODAY, '13:45');
   assert.equal(start.sort?.sort, 'Afternoon');
   assert.deepEqual(start.open.map((s) => s.sort), ['Afternoon']);
-  assert.equal(start.latestFinished, null);
+  assert.deepEqual(start.finished, []);
 
   const overlap = sampleWorld(TODAY, '17:35');
   assert.deepEqual(overlap.open.map((s) => s.sort), ['Twilight', 'Afternoon']);
@@ -164,8 +164,13 @@ test('the moments walk through the night, with the sorts overlapping and separat
 
   const finished = sampleWorld(TODAY, '23:00');
   assert.deepEqual(finished.open, []);
-  assert.equal(finished.latestFinished?.sort, 'Twilight');
-  assert.match(await t.text('/sample?at=23:00'), /finished \d+:\d\d PM/);
+  assert.deepEqual(finished.finished.map((s) => s.sort), ['Twilight', 'Afternoon']);
+  const nightDone = await t.text('/sample?at=23:00');
+  assert.match(nightDone, /finished \d+:\d\d PM/);
+  assert.match(nightDone, /href="\/sample\/sort\/afternoon\?at=23:00">Afternoon \(finished\)/);
+  assert.match(nightDone, /<div class="label">Volume<\/div>/);
+  assert.ok(!nightDone.includes('Volume so far'));
+  assert.ok(!nightDone.includes(' running<span'));
 });
 
 test('a bad time falls back to mid-sort, and a time is only taken inside the night', async () => {

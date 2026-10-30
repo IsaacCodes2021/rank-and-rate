@@ -280,9 +280,61 @@ test('before any update the ranking says so, and lines someone picked say so too
   const pat = await t.join('Pat Sample');
   await t.start(pat, 'Afternoon', ['PS1']);
   const page = await t.text('/live');
+  assert.match(page, /no updates yet/); // a running sort that has not had one
+  assert.match(page, /Volume so far/);
   assert.match(topOf(page, 'PS'), /No numbers yet/);
   assert.match(topOf(page, 'PD'), /No numbers yet/);
   assert.match(rowOf(page, 'PS1'), /No update yet/);
+});
+
+test('typed totals read as a finished sort: no start or finish time, and no time on Final (D128)', async () => {
+  const t = await setup();
+  t.setNow(at('09:00', '2026-10-31')); // typed the morning after
+  const admin = await t.admin();
+  await t.post('/api/admin/night', { date: '2026-10-30', sort: 'Afternoon', rows: [{ lineId: 'PS1', hours: 20, volume: 9647 }, { lineId: 'PS2', hours: 20, volume: 9000 }, { lineId: 'PD1', hours: 12, volume: 3300 }] }, admin);
+  const page = await t.text('/live');
+  assert.match(page, /<p class="sub">Fri, Oct 30 · finished<\/p>/);
+  assert.ok(!page.includes('no updates yet'));
+  assert.match(page, /<div class="label">Volume<\/div>/);
+  assert.ok(!page.includes('Volume so far'));
+  assert.match(rowOf(page, 'PS1'), /<span class="pill final">Final<\/span>/);
+  assert.ok(!rowOf(page, 'PS1').includes('9:00 AM'));
+  assert.match(page, /2 lines<span class="shown">/);
+  assert.match(page, /1 line<span class="shown">/);
+  assert.ok(!page.includes(' running<span'));
+  assert.deepEqual(topIds(page, 'PS'), ['PS1', 'PS2']);
+});
+
+test("a day's finished sorts are one tap apart, on /live and on each sort's own address (D128)", async () => {
+  const t = await setup();
+  const admin = await t.admin();
+  const save = async (date: string, sort: string) => ((await (await t.post('/api/admin/night', { date, sort, rows: [{ lineId: 'PS1', hours: 20, volume: 9000 }] }, admin)).json()) as { shiftId: number }).shiftId;
+  const older = await save('2026-10-29', 'Twilight');
+  const afternoon = await save('2026-10-30', 'Afternoon');
+  const twilight = await save('2026-10-30', 'Twilight');
+
+  const current = await t.text('/live');
+  assert.match(current, /<h1>Twilight<\/h1>/);
+  assert.match(current, new RegExp(`href="/live/${afternoon}"[^>]*>Afternoon \\(finished\\)`));
+  assert.match(current, new RegExp(`href="/live/${twilight}" aria-current="true">Twilight \\(finished\\)`));
+
+  const first = await t.text(`/live/${afternoon}`);
+  assert.match(first, /<h1>Afternoon<\/h1>/);
+  assert.match(first, new RegExp(`href="/live/${afternoon}" aria-current="page">Afternoon`));
+  assert.match(first, new RegExp(`href="/live/${twilight}"[^>]*>Twilight`));
+
+  // An older day is not in the tabs, and still has its own address.
+  assert.ok(!current.includes(`/live/${older}"`));
+  assert.match(await t.text(`/live/${older}`), /Thu, Oct 29/);
+});
+
+test('correcting a sort does not change which one /live shows', async () => {
+  const t = await setup();
+  const admin = await t.admin();
+  await t.post('/api/admin/night', { date: '2026-10-30', sort: 'Afternoon', rows: [{ lineId: 'PS1', hours: 20, volume: 9000 }] }, admin);
+  await t.post('/api/admin/night', { date: '2026-10-30', sort: 'Twilight', rows: [{ lineId: 'PS1', hours: 20, volume: 9000 }] }, admin);
+  await t.post('/api/admin/night', { date: '2026-10-30', sort: 'Afternoon', rows: [{ lineId: 'PS1', hours: 20, volume: 9100 }] }, admin);
+  assert.match(await t.text('/live'), /<h1>Twilight<\/h1>/);
 });
 
 test('a ranked name is made safe for the page', async () => {
