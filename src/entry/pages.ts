@@ -1,5 +1,5 @@
 // The phone screens: admin sign-in, the end-of-night totals screen (D065), adding supervisors,
-// and supervisor sign-in (D111). Plain server-rendered HTML with a small script, so the page
+// and supervisor sign-in and sign-up (D111, D112). Plain server-rendered HTML with a small script, so the page
 // stays tiny and needs no build step (D110). Large text and tap targets, number keypads, no
 // sideways scrolling.
 import { html, raw } from 'hono/html';
@@ -34,6 +34,9 @@ const STYLE = raw(`<style>
   .msg.info { background: #eef3fb; border: 2px solid #0a58ca; }
   .link { background: none; color: #0a58ca; padding: 0 4px; min-height: 44px; text-decoration: underline; font-weight: 400; }
   .links { display: flex; gap: 8px; align-items: baseline; white-space: nowrap; }
+  .number { font-size: 32px; font-weight: 700; letter-spacing: 1px; margin: 8px 0 16px; overflow-wrap: anywhere; }
+  .note { font-size: 15px; color: #444; }
+  h2:focus { outline: none; }
 </style>`);
 
 function layout(title: string, body: unknown) {
@@ -364,8 +367,108 @@ export function supervisorSignInPage() {
 <div id="msg" role="alert"></div>
 <p><button type="submit">Sign in</button></p>
 </form>
+<p><a class="link" href="/sign-up">First time? Create your account</a></p>
 </main>
 ${SUPERVISOR_SIGN_IN_SCRIPT}`,
+  );
+}
+
+const SUPERVISOR_SIGN_UP_SCRIPT = raw(`<script>
+(function () {
+  var form = document.getElementById('supervisor-sign-up');
+  var box = document.getElementById('confirm');
+  var msg = document.getElementById('msg');
+  var codeEl = document.getElementById('code');
+  var nameEl = document.getElementById('name');
+  var pinEl = document.getElementById('pin');
+  var roleEl = document.getElementById('role');
+  var yes = document.getElementById('confirm-yes');
+
+  function showForm(kind, text, focusEl) {
+    box.hidden = true;
+    form.hidden = false;
+    msg.className = text ? 'msg ' + kind : '';
+    msg.textContent = text;
+    if (focusEl) focusEl.focus();
+  }
+
+  [[codeEl, nameEl], [nameEl, pinEl]].forEach(function (pair) {
+    pair[0].addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') { e.preventDefault(); pair[1].focus(); }
+    });
+  });
+
+  // The number is masked while typing, so it is shown here to be checked before it is saved for good.
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var pin = pinEl.value.trim();
+    if (!/^[0-9]{4,12}$/.test(pin)) { showForm('err', 'The ID number must be 4 to 12 digits.', pinEl); return; }
+    document.getElementById('confirm-name').textContent = nameEl.value.trim();
+    document.getElementById('confirm-number').textContent = pin;
+    form.hidden = true;
+    box.hidden = false;
+    document.getElementById('confirm-title').focus();
+  });
+
+  document.getElementById('confirm-back').addEventListener('click', function () { showForm('', '', pinEl); });
+
+  yes.addEventListener('click', function () {
+    yes.disabled = true;
+    fetch('/api/supervisor/sign-up', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ code: codeEl.value, name: nameEl.value, pin: pinEl.value, role: roleEl.value })
+    }).then(function (res) {
+      if (res.ok) { location.href = '/sign-in'; return; }
+      return res.json().then(function (body) {
+        var text = (body.errors || []).map(function (er) { return er.message; }).join(' ') || 'Could not create the account.';
+        showForm('err', text, res.status === 401 ? codeEl : pinEl);
+      });
+    }).catch(function () {
+      showForm('err', 'No connection. Nothing was saved; try again.', null);
+    }).then(function () { yes.disabled = false; });
+  });
+})();
+</script>`);
+
+export function supervisorSignUpPage({ open }: { open: boolean }) {
+  if (!open) {
+    return layout(
+      'Create your account',
+      html`<main>
+<h1>Create your account</h1>
+<p>Sign-up is not open yet. Ask the admin.</p>
+<p><a class="link" href="/sign-in">Back to sign-in</a></p>
+</main>`,
+    );
+  }
+  return layout(
+    'Create your account',
+    html`<main>
+<h1>Create your account</h1>
+<form id="supervisor-sign-up">
+<label for="code">Sign-up code</label>
+<input id="code" autocapitalize="off" autocomplete="off" enterkeyhint="next" required autofocus>
+<label for="name">Full name</label>
+<input id="name" autocapitalize="words" autocomplete="name" maxlength="80" enterkeyhint="next" required>
+<label for="pin">ID number</label>
+<input id="pin" type="password" inputmode="numeric" pattern="[0-9]*" autocomplete="off" maxlength="12" required>
+<label for="role">Role</label>
+<select id="role">${ROLES.map((r) => html`<option value="${r}">${ROLE_LABEL[r]}</option>`)}</select>
+<div id="msg" role="alert"></div>
+<p><button type="submit">Continue</button></p>
+<p class="note">If your name or number is already taken, see the admin.</p>
+<p><a class="link" href="/sign-in">Already have an account? Sign in</a></p>
+</form>
+<div id="confirm" hidden>
+<h2 id="confirm-title" tabindex="-1">Are you sure this is the correct ID number?</h2>
+<p class="number" id="confirm-number"></p>
+<p>For <strong id="confirm-name"></strong>. You will not be able to change this.</p>
+<p><button type="button" id="confirm-yes">Yes, create my account</button></p>
+<p><button type="button" class="link" id="confirm-back">Go back</button></p>
+</div>
+</main>
+${SUPERVISOR_SIGN_UP_SCRIPT}`,
   );
 }
 

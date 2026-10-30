@@ -9,6 +9,7 @@ import { ADMIN_COOKIE, SUPERVISOR_COOKIE, createApp, type AppOptions, type Env }
 const CODE = 'test-only-code-1234';
 const KEY = 's'.repeat(40);
 const SALT = 'p'.repeat(40);
+const SIGNUP = 'test-signup-code';
 const START = new Date('2026-10-30T20:00:00Z');
 const NAME = 'Sample Supervisor 01';
 const NUMBER = '10000001'; // made up, as is every number in this file
@@ -19,7 +20,7 @@ async function setup(options: AppOptions = {}, env: Partial<Env> = {}) {
   seed(sqlite);
   let now = START;
   const app = createApp({ now: () => now, failureDelayMs: 0, ...options });
-  const fullEnv: Env = { DB: d1Shim(sqlite), ADMIN_CODE: CODE, SESSION_SECRET: KEY, PIN_SALT: SALT, ...env };
+  const fullEnv: Env = { DB: d1Shim(sqlite), ADMIN_CODE: CODE, SESSION_SECRET: KEY, PIN_SALT: SALT, SIGNUP_CODE: SIGNUP, ...env };
   const post = (path: string, body: unknown, cookie?: string) =>
     app.request(path, { method: 'POST', headers: { 'content-type': 'application/json', ...(cookie ? { cookie } : {}) }, body: JSON.stringify(body) }, fullEnv);
   const get = (path: string, cookie?: string) => app.request(path, { headers: cookie ? { cookie } : {} }, fullEnv);
@@ -34,6 +35,16 @@ async function setup(options: AppOptions = {}, env: Partial<Env> = {}) {
     },
     add: (name: string, pin: string, role = 'part_time') => post('/api/admin/supervisors', { name, pin, role }, admin),
     signIn: (name: string, pin: unknown) => post('/api/supervisor/sign-in', { name, pin }),
+    signUp: (fields: Record<string, unknown> = {}, address = '203.0.113.1') =>
+      app.request(
+        '/api/supervisor/sign-up',
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'cf-connecting-ip': address },
+          body: JSON.stringify({ code: SIGNUP, name: NAME, pin: NUMBER, role: 'part_time', ...fields }),
+        },
+        fullEnv,
+      ),
     rows: (sql: string) => sqlite.prepare(sql).all() as Record<string, unknown>[],
     count: (sql: string) => (sqlite.prepare(sql).get() as { n: number }).n,
   };
@@ -302,4 +313,180 @@ test('the supervisors page is admin only, lists names and roles, and shows no nu
   assert.match(page, /Full-time/);
   assert.ok(!page.includes(NUMBER));
   for (const row of t.rows('SELECT pin_hash FROM supervisor')) assert.ok(!page.includes(String(row.pin_hash)));
+});
+
+test('with the right code a supervisor creates their own account and is signed in', async () => {
+  const t = await setup();
+  const res = await t.signUp({ role: 'full_time' });
+  assert.equal(res.status, 200);
+  assert.equal(((await res.json()) as { expiresAt: string }).expiresAt, later(SESSION_SECONDS * 1000).toISOString());
+
+  const setCookie = res.headers.get('set-cookie') ?? '';
+  assert.match(setCookie, /HttpOnly/);
+  assert.match(setCookie, /Secure/);
+  assert.match(setCookie, /SameSite=Strict/);
+  assert.deepEqual(await (await t.get('/api/supervisor/me', cookieOf(res))).json(), { ok: true, name: NAME, role: 'full_time' });
+
+  assert.deepEqual(
+    t.rows("SELECT actor, action, after FROM audit_log WHERE actor != 'admin' ORDER BY id").map((r) => ({ ...r })),
+    [
+      { actor: NAME, action: 'added supervisor', after: JSON.stringify({ name: NAME, role: 'full_time' }) },
+      { actor: NAME, action: 'signed in', after: null },
+    ],
+  );
+  assert.equal((await t.signIn(NAME, NUMBER)).status, 200); // and can sign in again later
+});
+
+test('signing up gives no admin rights', async () => {
+  const t = await setup();
+  const cookie = cookieOf(await t.signUp({ role: 'full_time' }));
+  assert.equal((await t.get('/api/admin/me', cookie)).status, 401);
+  assert.equal((await t.post('/api/admin/supervisors', { name: 'New Person', pin: '30000000', role: 'part_time' }, cookie)).status, 401);
+});
+
+test('a wrong or missing code creates nothing and gives no cookie', async () => {
+  const t = await setup();
+  const wrong = await t.signUp({ code: 'not-the-code' });
+  assert.equal(wrong.status, 401);
+  assert.equal(wrong.headers.get('set-cookie'), null);
+  assert.deepEqual(await wrong.json(), { ok: false, errors: [{ lineId: null, message: 'Wrong sign-up code.' }] });
+  for (const code of ['', 5, null, [SIGNUP]]) assert.equal((await t.signUp({ code }, '203.0.113.2')).status, 401, String(code));
+  assert.equal(t.count('SELECT count(*) AS n FROM supervisor'), 0);
+  assert.equal(t.count('SELECT count(*) AS n FROM session'), 0);
+});
+
+test('a wrong code is checked first, so it says nothing about names or numbers', async () => {
+  const t = await setup();
+  await t.signUp();
+  const res = await t.signUp({ code: 'not-the-code' }, '203.0.113.2'); // this name and number are taken
+  assert.deepEqual(await res.json(), { ok: false, errors: [{ lineId: null, message: 'Wrong sign-up code.' }] });
+});
+
+test('a number or name already in use is refused and nothing is written (D111)', async () => {
+  const t = await setup();
+  await t.signUp();
+  const number = await t.signUp({ name: 'Sample Supervisor 02' });
+  assert.equal(number.status, 400);
+  assert.equal(number.headers.get('set-cookie'), null);
+  assert.deepEqual(await number.json(), { ok: false, errors: [{ lineId: null, message: 'That ID number is already in use.' }] });
+
+  const name = await t.signUp({ name: 'sample  supervisor 01', pin: '10000002' });
+  assert.deepEqual(await name.json(), { ok: false, errors: [{ lineId: null, message: 'That name is already in use.' }] });
+
+  assert.equal(t.count('SELECT count(*) AS n FROM supervisor'), 1);
+  assert.equal(t.count('SELECT count(*) AS n FROM session'), 1);
+});
+
+test('a bad number, name or role is refused, and a number must arrive as text', async () => {
+  const t = await setup();
+  const refused: [Record<string, unknown>, string][] = [
+    [{ pin: '123' }, 'The ID number must be 4 to 12 digits.'],
+    [{ pin: 10000001 }, 'The ID number must be 4 to 12 digits.'],
+    [{ name: '   ' }, 'Enter a full name of up to 80 characters.'],
+    [{ name: 5 }, 'Enter a full name of up to 80 characters.'],
+    [{ role: 'manager' }, 'Pick part-time or full-time.'],
+    [{ role: 'admin' }, 'Pick part-time or full-time.'],
+  ];
+  for (const [i, [fields, message]] of refused.entries()) {
+    const res = await t.signUp(fields, `203.0.113.${i + 10}`);
+    assert.equal(res.status, 400, message);
+    assert.deepEqual(await res.json(), { ok: false, errors: [{ lineId: null, message }] });
+  }
+  assert.equal(t.count('SELECT count(*) AS n FROM supervisor'), 0);
+});
+
+test(`after ${MAX_FAILURES} refusals that address waits ${LOCK_MINUTES} minutes; other addresses do not`, async () => {
+  const t = await setup();
+  for (let i = 0; i < MAX_FAILURES; i += 1) assert.equal((await t.signUp({ code: `guess-${i}` })).status, 401);
+
+  const locked = await t.signUp();
+  assert.equal(locked.status, 429);
+  assert.equal(locked.headers.get('set-cookie'), null);
+  assert.equal(t.count('SELECT count(*) AS n FROM supervisor'), 0);
+
+  assert.equal((await t.signUp({}, '203.0.113.2')).status, 200);
+  t.setNow(later((LOCK_MINUTES + 1) * 60 * 1000));
+  assert.equal((await t.signUp({ name: 'Sample Supervisor 02', pin: '10000002' })).status, 200);
+});
+
+test('testing numbers through the form gets locked out too', async () => {
+  const t = await setup();
+  await t.signUp();
+  for (let i = 0; i < MAX_FAILURES; i += 1) {
+    assert.equal((await t.signUp({ name: `Person ${i}` }, '203.0.113.2')).status, 400); // that number is taken
+  }
+  assert.equal((await t.signUp({ name: 'Person 9' }, '203.0.113.2')).status, 429);
+});
+
+test('a refused sign-up is slowed down', async () => {
+  const t = await setup({ failureDelayMs: 60 });
+  const started = performance.now();
+  await t.signUp({ code: 'not-the-code' });
+  assert.ok(performance.now() - started >= 50);
+});
+
+test('sign-up stays closed until both secrets are set and long enough', async () => {
+  for (const env of [{ SIGNUP_CODE: undefined }, { SIGNUP_CODE: 'abc' }, { PIN_SALT: undefined }, { PIN_SALT: 'too-short' }]) {
+    const t = await setup({}, env);
+    const res = await t.signUp({ code: 'abc' });
+    assert.equal(res.status, 503);
+    assert.deepEqual(await res.json(), { ok: false, errors: [{ lineId: null, message: 'Sign-up is not open yet.' }] });
+    assert.equal(t.count('SELECT count(*) AS n FROM supervisor'), 0);
+
+    const page = await (await t.get('/sign-up')).text();
+    assert.match(page, /Sign-up is not open yet/);
+    assert.ok(!page.includes('id="supervisor-sign-up"'));
+  }
+});
+
+test('sign-up posts must be JSON', async () => {
+  const sqlite = openDb(':memory:');
+  migrate(sqlite);
+  const res = await createApp({ failureDelayMs: 0 }).request(
+    '/api/supervisor/sign-up',
+    { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: `code=${SIGNUP}` },
+    { DB: d1Shim(sqlite), PIN_SALT: SALT, SIGNUP_CODE: SIGNUP },
+  );
+  assert.equal(res.status, 415);
+});
+
+test('the number, the code and the address are never stored or logged in plain text', async () => {
+  const t = await setup();
+  await t.signUp();
+  await t.signUp({ name: 'Sample Supervisor 02' });
+  await t.signUp({ code: 'not-the-code', pin: '20000000' });
+
+  const everything = JSON.stringify([
+    t.rows('SELECT * FROM supervisor'),
+    t.rows('SELECT * FROM audit_log'),
+    t.rows('SELECT * FROM sign_in_failure'),
+    t.rows('SELECT * FROM session'),
+  ]);
+  for (const secret of [NUMBER, '20000000', SIGNUP, 'not-the-code', '203.0.113.1']) assert.ok(!everything.includes(secret), secret);
+  const whos = t.rows('SELECT who FROM sign_in_failure').map((r) => String(r.who));
+  assert.equal(whos.length, 2);
+  for (const who of whos) assert.match(who, /^signup:[0-9a-f]{16}$/);
+});
+
+test('/sign-up shows the form and the confirmation, never the code, and is never cached', async () => {
+  const t = await setup();
+  const res = await t.get('/sign-up');
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('cache-control'), 'no-store');
+  const page = await res.text();
+  assert.match(page, /id="supervisor-sign-up"/);
+  assert.match(page, /<input id="pin" type="password" inputmode="numeric"/);
+  assert.match(page, /<div id="confirm" hidden>/);
+  assert.match(page, /Are you sure this is the correct ID number\?/);
+  assert.match(page, /You will not be able to change this\./);
+  assert.ok(!page.includes(SIGNUP));
+  assert.match(await (await t.get('/sign-in')).text(), /href="\/sign-up"/);
+});
+
+test('someone already signed in is sent from /sign-up to /sign-in', async () => {
+  const t = await setup();
+  const cookie = cookieOf(await t.signUp());
+  const res = await t.get('/sign-up', cookie);
+  assert.equal(res.status, 302);
+  assert.equal(res.headers.get('location'), '/sign-in');
 });

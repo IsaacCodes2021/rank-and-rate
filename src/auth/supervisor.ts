@@ -11,6 +11,9 @@ export const isValidPin = (pin: string) => /^[0-9]{4,12}$/.test(pin);
 
 export const hashPin = async (pin: string, salt: string) => hex(await hmac(salt, pin));
 
+// Refused sign-ups count per address (D113), kept only as a keyed hash so no IP address is stored.
+export const hashAddress = async (address: string, salt: string) => hex(await hmac(salt, `address:${address}`)).slice(0, 16);
+
 // The cookie holds a random token; the session table holds only its hash, so reading the
 // database does not give anyone a working cookie.
 export const newSessionToken = () => toBase64Url(crypto.getRandomValues(new Uint8Array(32)));

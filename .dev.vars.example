@@ -1,6 +1,7 @@
 # Copy to .dev.vars (not committed) for `npm run dev`. Use your own local values here;
 # the live site reads its own values from Cloudflare secrets (`npx wrangler secret put NAME`).
-# ADMIN_CODE: at least 4 characters. SESSION_SECRET and PIN_SALT: at least 32 random characters.
+# ADMIN_CODE and SIGNUP_CODE: at least 4 characters. SESSION_SECRET and PIN_SALT: at least 32 random characters.
 ADMIN_CODE=
 SESSION_SECRET=
 PIN_SALT=
+SIGNUP_CODE=

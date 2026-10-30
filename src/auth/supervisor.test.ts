@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { hashPin, isValidPin, newSessionToken, sessionIdOf } from './supervisor.ts';
+import { hashAddress, hashPin, isValidPin, newSessionToken, sessionIdOf } from './supervisor.ts';
 
 const SALT = 'p'.repeat(40);
 
@@ -21,6 +21,15 @@ test('a different number or a different key gives a different hash', async () =>
   assert.notEqual(hash, await hashPin('10000002', SALT));
   assert.notEqual(hash, await hashPin('10000001', 'q'.repeat(40)));
   assert.notEqual(await hashPin('0123', SALT), await hashPin('123', SALT)); // leading zeros count
+});
+
+test('an address hashes to a short value that does not contain it and depends on the key', async () => {
+  const hash = await hashAddress('203.0.113.7', SALT);
+  assert.match(hash, /^[0-9a-f]{16}$/);
+  assert.equal(hash, await hashAddress('203.0.113.7', SALT));
+  assert.notEqual(hash, await hashAddress('203.0.113.8', SALT));
+  assert.notEqual(hash, await hashAddress('203.0.113.7', 'q'.repeat(40)));
+  assert.notEqual(hash, (await hashPin('203.0.113.7', SALT)).slice(0, 16));
 });
 
 test('session tokens are random, and the stored id is not the token', async () => {

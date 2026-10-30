@@ -4,7 +4,7 @@ import { createMiddleware } from 'hono/factory';
 import { secureHeaders } from 'hono/secure-headers';
 import { FAILURE_DELAY_MS, isLocked, recordFailure } from '../auth/limits.ts';
 import { SESSION_SECONDS, readSession, sameSecret, signSession } from '../auth/session.ts';
-import { hashPin, isValidPin, newSessionToken, sessionIdOf } from '../auth/supervisor.ts';
+import { hashAddress, hashPin, isValidPin, newSessionToken, sessionIdOf } from '../auth/supervisor.ts';
 import {
   ValidationError,
   getNightTotals,
@@ -22,14 +22,16 @@ import {
   listSupervisors,
   normalizeName,
   startSession,
+  type SupervisorLogin,
 } from '../data/supervisor.ts';
-import { nightPage, signInPage, supervisorHomePage, supervisorSignInPage, supervisorsPage } from '../entry/pages.ts';
+import { nightPage, signInPage, supervisorHomePage, supervisorSignInPage, supervisorSignUpPage, supervisorsPage } from '../entry/pages.ts';
 
 export type Env = {
   DB: D1Database;
   ADMIN_CODE?: string; // Cloudflare secret (D058, D109)
   SESSION_SECRET?: string; // Cloudflare secret that signs the session cookie
   PIN_SALT?: string; // Cloudflare secret that keys the hash of supervisor ID numbers (D058, D111)
+  SIGNUP_CODE?: string; // Cloudflare secret the admin hands out; sign-up stays closed without it (D113)
 };
 
 export type AppOptions = {
@@ -42,7 +44,14 @@ export const SUPERVISOR_COOKIE = 'rr_supervisor';
 const MIN_ADMIN_CODE = 4; // D109: short on purpose; the lockout in D107 limits guessing
 const MIN_SESSION_SECRET = 32;
 const MIN_PIN_SALT = 32;
+const MIN_SIGNUP_CODE = 4;
 const WRONG_SIGN_IN = 'That name and ID number do not match.'; // the same whichever one was wrong
+
+// Sign-up is open only when both secrets are set and long enough.
+function signUpSecrets(env: Env) {
+  const { SIGNUP_CODE: code, PIN_SALT: salt } = env;
+  return code && code.length >= MIN_SIGNUP_CODE && salt && salt.length >= MIN_PIN_SALT ? { code, salt } : null;
+}
 
 const PAGE = `<!doctype html>
 <html lang="en">
@@ -117,6 +126,15 @@ export function createApp(options: AppOptions = {}) {
   const supervisorOf = async (c: Context<{ Bindings: Env }>) => {
     const token = getCookie(c, SUPERVISOR_COOKIE);
     return token ? getSessionSupervisor(c.env.DB, await sessionIdOf(token), now()) : null;
+  };
+
+  // Signs a supervisor in on this phone for 12 hours (D083); answers with when that ends.
+  const signInAs = async (c: Context<{ Bindings: Env }>, supervisor: SupervisorLogin, at: Date) => {
+    const token = newSessionToken();
+    const expiresAt = new Date(at.getTime() + SESSION_SECONDS * 1000);
+    await startSession(c.env.DB, await sessionIdOf(token), supervisor, expiresAt, at);
+    setCookie(c, SUPERVISOR_COOKIE, token, { httpOnly: true, secure: true, sameSite: 'Strict', path: '/', maxAge: SESSION_SECONDS });
+    return expiresAt.toISOString();
   };
 
   app.get('/', (c) => c.html(PAGE));
@@ -267,11 +285,47 @@ export function createApp(options: AppOptions = {}) {
       return c.json({ ok: false, error: WRONG_SIGN_IN }, 401);
     }
 
-    const token = newSessionToken();
-    const expiresAt = new Date(at.getTime() + SESSION_SECONDS * 1000);
-    await startSession(c.env.DB, await sessionIdOf(token), supervisor, expiresAt, at);
-    setCookie(c, SUPERVISOR_COOKIE, token, { httpOnly: true, secure: true, sameSite: 'Strict', path: '/', maxAge: SESSION_SECONDS });
-    return c.json({ ok: true, expiresAt: expiresAt.toISOString() });
+    return c.json({ ok: true, expiresAt: await signInAs(c, supervisor, at) });
+  });
+
+  // A supervisor creates their own account (D112) with the code the admin hands out (D113).
+  app.get('/sign-up', async (c) => {
+    c.header('Cache-Control', 'no-store');
+    if (await supervisorOf(c)) return c.redirect('/sign-in');
+    return c.html(supervisorSignUpPage({ open: signUpSecrets(c.env) !== null }));
+  });
+
+  app.post('/api/supervisor/sign-up', async (c) => {
+    const secrets = signUpSecrets(c.env);
+    if (!secrets) return c.json({ ok: false, errors: [{ lineId: null, message: 'Sign-up is not open yet.' }] }, 503);
+    const body = await c.req.json<{ code?: unknown; name?: unknown; pin?: unknown; role?: unknown }>().catch(() => null);
+    const text = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+    const at = now();
+
+    // Wrong codes and refusals are slowed and limited, so nobody can guess the code or use the
+    // form to test which ID numbers are in use.
+    const who = `signup:${await hashAddress(c.req.header('cf-connecting-ip') ?? 'unknown', secrets.salt)}`;
+    if (await isLocked(c.env.DB, who, at)) {
+      return c.json({ ok: false, errors: [{ lineId: null, message: 'Too many tries. Try again in 15 minutes.' }] }, 429);
+    }
+    const refuse = async (status: 400 | 401, errors: { lineId: string | null; message: string }[]) => {
+      await recordFailure(c.env.DB, who, at);
+      await sleep(failureDelayMs);
+      return c.json({ ok: false, errors }, status);
+    };
+
+    if (!(await sameSecret(text(body?.code), secrets.code))) return refuse(401, [{ lineId: null, message: 'Wrong sign-up code.' }]);
+    const pin = text(body?.pin);
+    if (!isValidPin(pin)) return refuse(400, [{ lineId: null, message: 'The ID number must be 4 to 12 digits.' }]);
+    const name = normalizeName(text(body?.name));
+    try {
+      await addSupervisor(c.env.DB, { name, role: text(body?.role), pinHash: await hashPin(pin, secrets.salt), actor: name }, at);
+    } catch (err) {
+      if (err instanceof ValidationError) return refuse(400, err.errors);
+      throw err;
+    }
+    const supervisor = await findActiveSupervisor(c.env.DB, name);
+    return c.json({ ok: true, expiresAt: await signInAs(c, supervisor!, at) });
   });
 
   app.post('/api/supervisor/sign-out', async (c) => {
