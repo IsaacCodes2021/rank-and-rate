@@ -213,6 +213,19 @@ test('expected PPH: a line override wins, else the group setting (D041)', () => 
   assert.equal(expectedPph({ group: 'Unload', expectedPphOverride: null }, settings), 550);
   assert.equal(expectedPph({ group: 'Wings', expectedPphOverride: 400 }, settings), 400);
   assert.equal(expectedPph({ group: 'Dock', expectedPphOverride: null }, settings), null);
+
+  // A sort can have its own number; any other sort keeps the group's default (D134).
+  const bySort = { ...settings, 'expected_pph.Twilight.North': 300 };
+  const north = { group: 'North', expectedPphOverride: null };
+  assert.equal(expectedPph(north, bySort, 'Twilight'), 300);
+  assert.equal(expectedPph(north, bySort, 'Afternoon'), 275);
+  assert.equal(expectedPph(north, bySort), 275);
+  assert.equal(expectedPph({ group: 'Wings', expectedPphOverride: null }, bySort, 'Twilight'), 350);
+  assert.equal(expectedPph({ group: 'North', expectedPphOverride: 400 }, bySort, 'Twilight'), 400);
+  assert.equal(expectedPph(north, { ...settings, 'expected_pph.Twilight.North': 0 }, 'Twilight'), null);
+  // 5,500 pieces in 20 hours is 275 PPH: 100% of 275, and 91.67% of 300.
+  assert.equal(round(effectiveness(pph(5500, 20), expectedPph(north, bySort, 'Afternoon'))), 100);
+  assert.equal(round(effectiveness(pph(5500, 20), expectedPph(north, bySort, 'Twilight'))), 91.67);
 });
 
 test('summarize: one shift matches the single-shift formulas', () => {

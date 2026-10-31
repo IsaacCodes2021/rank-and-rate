@@ -26,19 +26,19 @@ export type LineInfo = { id: string; type: LineType; group: string; expectedPph:
 
 type LineRow = { id: string; type: LineType; grp: string; expected_pph_override: number | null; active: number };
 
-const expectedOf = (l: LineRow, settings: Record<string, number>) => expectedPph({ group: l.grp, expectedPphOverride: l.expected_pph_override }, settings);
+const expectedOf = (l: LineRow, settings: Record<string, number>, sort: string) => expectedPph({ group: l.grp, expectedPphOverride: l.expected_pph_override }, settings, sort);
 
 const settingsFrom = (rows: { key: string; value: string }[]) => Object.fromEntries(rows.map((r) => [r.key, Number(r.value)]));
 
 const LINE_COLUMNS = 'SELECT id, type, grp, expected_pph_override, active FROM line';
 const EXPECTED_SETTINGS = "SELECT key, value FROM settings WHERE key LIKE 'expected_pph.%'";
 
-// One line's details, or null if there is no such line.
-export async function findLine(db: D1Database, id: string): Promise<LineInfo | null> {
+// One line's details on a sort, or null if there is no such line.
+export async function findLine(db: D1Database, id: string, sort: string): Promise<LineInfo | null> {
   const [lineResult, settingsResult] = await db.batch<unknown>([db.prepare(`${LINE_COLUMNS} WHERE id = ?`).bind(id), db.prepare(EXPECTED_SETTINGS)]);
   const line = (lineResult.results as LineRow[])[0];
   if (!line) return null;
-  return { id: line.id, type: line.type, group: line.grp, expectedPph: expectedOf(line, settingsFrom(settingsResult.results as { key: string; value: string }[])) ?? 0 };
+  return { id: line.id, type: line.type, group: line.grp, expectedPph: expectedOf(line, settingsFrom(settingsResult.results as { key: string; value: string }[]), sort) ?? 0 };
 }
 
 type EntryRow = {
@@ -113,7 +113,7 @@ export async function loadNightLines(db: D1Database, { sort, range, lineId = nul
       lineId: line.id,
       type: line.type,
       group: line.grp,
-      expectedPph: expectedOf(line, settings),
+      expectedPph: expectedOf(line, settings, sort),
       supervisors: namesByNight.get(key) ?? [],
       hours: hours(entries),
       volume: volume(entries),

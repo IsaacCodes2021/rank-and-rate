@@ -144,10 +144,14 @@ export function sortStartMs(firstEntryMs: number): number {
   return Math.round((firstEntryMs - 15 * 60 * 1000) / FIVE_MIN) * FIVE_MIN;
 }
 
-// A line's own override, else its group's expected PPH from settings (D041).
-export function expectedPph(line: Line, settings: Record<string, number>): number | null {
+// Where a group's expected PPH for one sort lives in settings (D134).
+export const expectedPphKey = (group: string, sort: string) => `expected_pph.${sort}.${group}`;
+
+// A line's own override, else its group's expected PPH for the sort, else the group's default (D041, D134).
+export function expectedPph(line: Line, settings: Record<string, number>, sort: string | null = null): number | null {
   if (isNum(line.expectedPphOverride) && line.expectedPphOverride > 0) return line.expectedPphOverride;
-  const fromGroup = settings[`expected_pph.${line.group}`];
+  const forSort = sort === null ? undefined : settings[expectedPphKey(line.group, sort)];
+  const fromGroup = forSort ?? settings[`expected_pph.${line.group}`];
   return isNum(fromGroup) && fromGroup > 0 ? fromGroup : null;
 }
 

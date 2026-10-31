@@ -1,9 +1,10 @@
 // The phone screens: admin sign-in, the end-of-night totals screen (D065), adding supervisors,
-// and supervisor sign-in and sign-up (D111, D112). Plain server-rendered HTML with a small script, so the page
-// stays tiny and needs no build step (D110). Large text and tap targets, number keypads, no
-// sideways scrolling.
+// changing expected PPH (D134), and supervisor sign-in and sign-up (D111, D112). Plain server-rendered
+// HTML with a small script, so the page stays tiny and needs no build step (D110). Large text and tap
+// targets, number keypads, no sideways scrolling.
 import { html, raw } from 'hono/html';
-import { SORTS, type LineInfo } from '../data/night.ts';
+import { SORTS, type LineInfo, type Sort } from '../data/night.ts';
+import type { ExpectedGroup } from '../data/settings.ts';
 import { ROLES, type Role, type SupervisorInfo } from '../data/supervisor.ts';
 
 const STYLE = raw(`<style>
@@ -17,7 +18,7 @@ const STYLE = raw(`<style>
   input:focus, select:focus, button:focus { outline: 3px solid #0a58ca; outline-offset: 1px; }
   button { min-height: 48px; padding: 0 22px; border: 0; border-radius: 6px; background: #111; color: #fff; font-weight: 700; cursor: pointer; }
   button:disabled { background: #777; }
-  .top { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+  .top { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 0 12px; }
   .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
   table { width: 100%; border-collapse: collapse; margin-top: 16px; }
   th { position: sticky; top: 0; background: #fff; text-align: left; font-size: 15px; padding: 6px 4px; border-bottom: 2px solid #111; }
@@ -33,7 +34,7 @@ const STYLE = raw(`<style>
   .msg.err { background: #fff5f5; border: 2px solid #b00020; }
   .msg.info { background: #eef3fb; border: 2px solid #0a58ca; }
   .link { background: none; color: #0a58ca; padding: 0 4px; min-height: 44px; text-decoration: underline; font-weight: 400; }
-  .links { display: flex; gap: 8px; align-items: baseline; white-space: nowrap; }
+  .links { display: flex; flex-wrap: wrap; gap: 0 8px; align-items: baseline; white-space: nowrap; }
   .number { font-size: 32px; font-weight: 700; letter-spacing: 1px; margin: 8px 0 16px; overflow-wrap: anywhere; }
   .note { font-size: 15px; color: #444; }
   h2:focus { outline: none; }
@@ -242,7 +243,7 @@ export function nightPage({ lines, today }: { lines: LineInfo[]; today: string }
   return layout(
     'Night totals',
     html`<main>
-<div class="top"><h1>Night totals</h1><div class="links"><a class="link" href="/admin/supervisors">Supervisors</a><button type="button" class="link" id="sign-out">Sign out</button></div></div>
+<div class="top"><h1>Night totals</h1><div class="links"><a class="link" href="/admin/supervisors">Supervisors</a><a class="link" href="/admin/expected-pph">Expected PPH</a><button type="button" class="link" id="sign-out">Sign out</button></div></div>
 <form id="night" novalidate>
 <div class="pair">
 <div><label for="date">Date</label><input id="date" type="date" value="${today}" required></div>
@@ -306,7 +307,7 @@ export function supervisorsPage({ supervisors }: { supervisors: SupervisorInfo[]
   return layout(
     'Supervisors',
     html`<main>
-<div class="top"><h1>Supervisors</h1><a class="link" href="/admin">Night totals</a></div>
+<div class="top"><h1>Supervisors</h1><div class="links"><a class="link" href="/admin">Night totals</a><a class="link" href="/admin/expected-pph">Expected PPH</a></div></div>
 <form id="add-supervisor">
 <label for="name">Full name</label>
 <input id="name" autocapitalize="words" autocomplete="off" maxlength="80" required>
@@ -327,6 +328,80 @@ ${
 }
 </main>
 ${SUPERVISORS_SCRIPT}`,
+  );
+}
+
+const EXPECTED_SCRIPT = raw(`<script>
+(function () {
+  var form = document.getElementById('expected');
+  var msg = document.getElementById('msg');
+  var saveBtn = document.getElementById('save');
+  var inputs = Array.prototype.slice.call(form.querySelectorAll('input'));
+
+  function val(el) { return el.value.trim(); }
+  function show(kind, text) { msg.className = 'msg ' + kind; msg.textContent = text; }
+  function fromTo(el) { return el.dataset.sort + ' ' + el.dataset.group + ' from ' + el.dataset.saved + ' to ' + val(el); }
+
+  // The keypad's Next (or Enter) moves to the next number, as on the night totals screen.
+  inputs.forEach(function (el, i) {
+    el.addEventListener('keydown', function (e) {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      (inputs[i + 1] || saveBtn).focus();
+    });
+  });
+
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var changed = inputs.filter(function (el) { return val(el) !== el.dataset.saved; });
+    if (!changed.length) { show('info', 'Nothing has changed.'); return; }
+    var what = changed.map(fromTo).join(', ');
+    var oneSort = changed.every(function (el) { return el.dataset.sort === changed[0].dataset.sort; });
+    // A typo here moves the public rankings straight away, so the change is read back first.
+    if (!confirm('Change ' + what + '? Effectiveness, over/under and the rankings change on all saved nights of ' + (oneSort ? 'that sort' : 'those sorts') + ', past nights included.')) return;
+    saveBtn.disabled = true;
+    show('info', 'Saving...');
+    fetch('/api/admin/expected-pph', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ rows: changed.map(function (el) { return { group: el.dataset.group, sort: el.dataset.sort, expectedPph: val(el) }; }) })
+    }).then(function (res) {
+      if (res.status === 401) { show('err', 'Your sign-in ran out. Nothing was saved. Open this page in a new tab, sign in, then come back and press Save.'); return; }
+      return res.json().then(function (body) {
+        if (res.ok) {
+          changed.forEach(function (el) { el.dataset.saved = val(el); });
+          show('ok', 'Changed ' + what + '. The pages show it within about a minute.');
+          return;
+        }
+        show('err', 'Nothing was saved. ' + (body.errors || [{ message: body.error || 'Could not save.' }]).map(function (er) { return er.message; }).join(' '));
+      });
+    }).catch(function () {
+      show('err', 'No connection. Nothing was saved; try again.');
+    }).then(function () { saveBtn.disabled = false; });
+  });
+})();
+</script>`);
+
+export function expectedPphPage({ groups }: { groups: ExpectedGroup[] }) {
+  const lastGroup = groups[groups.length - 1]?.group;
+  const field = (g: ExpectedGroup, sort: Sort) => html`<td><input aria-label="${sort} ${g.group} expected PPH" data-group="${g.group}" data-sort="${sort}" data-saved="${g.bySort[sort] ?? ''}" value="${g.bySort[sort] ?? ''}" inputmode="numeric" pattern="[0-9]*" enterkeyhint="${g.group === lastGroup && sort === SORTS[SORTS.length - 1] ? 'done' : 'next'}" autocomplete="off"></td>`;
+  const area = (g: ExpectedGroup) => html`<tr data-area="${g.group}"><td class="line">${g.group}</td>${SORTS.map((sort) => field(g, sort))}</tr>
+<tr class="info"><td colspan="${SORTS.length + 1}">${g.lines.join(', ')}</td></tr>`;
+  return layout(
+    'Expected PPH',
+    html`<main>
+<div class="top"><h1>Expected PPH</h1><div class="links"><a class="link" href="/admin">Night totals</a><a class="link" href="/admin/supervisors">Supervisors</a></div></div>
+<p class="note">Each number applies to every saved night of its sort, past nights included. Changing one changes effectiveness, over/under and the rankings for that sort only.</p>
+<form id="expected" novalidate>
+<table>
+<thead><tr><th>Area</th>${SORTS.map((sort) => html`<th>${sort}</th>`)}</tr></thead>
+<tbody>${groups.map(area)}</tbody>
+</table>
+<div id="msg" role="status" aria-live="polite"></div>
+<p><button type="submit" id="save">Save</button></p>
+</form>
+</main>
+${EXPECTED_SCRIPT}`,
   );
 }
 

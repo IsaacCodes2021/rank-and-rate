@@ -86,7 +86,7 @@ export async function loadLiveSort(db: D1Database, shiftId: number): Promise<Liv
       id: l.id,
       type: l.type,
       group: l.grp,
-      expectedPph: expectedPph({ group: l.grp, expectedPphOverride: l.expected_pph_override }, settings),
+      expectedPph: expectedPph({ group: l.grp, expectedPphOverride: l.expected_pph_override }, settings, shift.sort),
       entries: rows.map((r) => ({
         kind: r.kind,
         slot: r.slot,

@@ -32,9 +32,10 @@ import { resultsPage } from '../dashboard/results-page.ts';
 import { loadLiveSort, recentSorts } from '../data/live.ts';
 import { finishedSortDays, findLine, loadNightLines } from '../data/results.ts';
 import { nightRowOf } from '../scoring/results.ts';
+import { listExpectedPph, saveExpectedPph, type ExpectedRow } from '../data/settings.ts';
 import { lastLines, myShift, myShifts, saveFinals, saveUpdates, setShiftLines, startShift } from '../data/shift.ts';
 import { isSampleSort, sampleLine, sampleOverview, sampleResults } from '../sample/pages.ts';
-import { nightPage, signInPage, supervisorSignInPage, supervisorSignUpPage, supervisorsPage } from '../entry/pages.ts';
+import { expectedPphPage, nightPage, signInPage, supervisorSignInPage, supervisorSignUpPage, supervisorsPage } from '../entry/pages.ts';
 import { finalPage, shiftDonePage, sortsPage, startShiftPage, updatePage } from '../entry/shift-pages.ts';
 
 export type Env = {
@@ -75,6 +76,13 @@ function toNightRow(raw: unknown): NightRow {
   const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   const field = (v: unknown) => (typeof v === 'number' || typeof v === 'string' ? (v as number) : null);
   return { lineId: typeof r.lineId === 'string' ? r.lineId : '', hours: field(r.hours), volume: field(r.volume) };
+}
+
+// The same for a row of the expected PPH screen; saveExpectedPph reports anything odd.
+function toExpectedRow(raw: unknown): ExpectedRow {
+  const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const value = typeof r.expectedPph === 'number' || typeof r.expectedPph === 'string' ? r.expectedPph : null;
+  return { group: typeof r.group === 'string' ? r.group : '', sort: typeof r.sort === 'string' ? r.sort : '', expectedPph: value };
 }
 
 export function createApp(options: AppOptions = {}) {
@@ -198,12 +206,13 @@ export function createApp(options: AppOptions = {}) {
   );
   app.get('/line/:line', (c) =>
     sharedPage(c, async (today) => {
-      const line = await findLine(c.env.DB, c.req.param('line').toUpperCase());
-      if (!line) return null;
+      const id = c.req.param('line').toUpperCase();
       const query = c.req.query();
-      const days = await finishedSortDays(c.env.DB, line.id);
+      const days = await finishedSortDays(c.env.DB, id);
       const sorts = days.length ? days.map((d) => d.sort) : ['Afternoon'];
       const sort = pickSort(sorts, query.sort) ?? 'Afternoon';
+      const line = await findLine(c.env.DB, id, sort); // its expected PPH goes by the sort (D134)
+      if (!line) return null;
       const { period, range } = readPeriod(today, query);
       const { rows } = await loadNightLines(c.env.DB, { sort, range, lineId: line.id });
       return String(
@@ -329,6 +338,27 @@ export function createApp(options: AppOptions = {}) {
         { date: String(body.date ?? ''), sort: String(body.sort ?? ''), rows: body.rows.map(toNightRow), actor: 'admin' },
         now(),
       );
+      return c.json({ ok: true, ...result });
+    } catch (err) {
+      if (err instanceof ValidationError) return c.json({ ok: false, errors: err.errors }, 400);
+      throw err;
+    }
+  });
+
+  // The admin changes each area's expected PPH for each sort here (D041, D134).
+  app.get('/admin/expected-pph', async (c) => {
+    c.header('Cache-Control', 'no-store');
+    if (!(await isAdmin(c))) return c.redirect('/admin');
+    return c.html(expectedPphPage({ groups: await listExpectedPph(c.env.DB) }));
+  });
+
+  app.post('/api/admin/expected-pph', requireAdmin, async (c) => {
+    const body = await c.req.json<{ rows?: unknown }>().catch(() => null);
+    if (!body || !Array.isArray(body.rows)) {
+      return c.json({ ok: false, errors: [{ lineId: null, message: 'Send the rows.' }] }, 400);
+    }
+    try {
+      const result = await saveExpectedPph(c.env.DB, { rows: body.rows.map(toExpectedRow), actor: 'admin' }, now());
       return c.json({ ok: true, ...result });
     } catch (err) {
       if (err instanceof ValidationError) return c.json({ ok: false, errors: err.errors }, 400);

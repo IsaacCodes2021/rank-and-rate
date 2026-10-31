@@ -154,3 +154,61 @@ test('saving a night needs the admin cookie, then saves and reports problems', a
   const noRows = await t.post('/api/admin/night', { date: '2026-10-26' }, cookie);
   assert.equal(noRows.status, 400);
 });
+
+test('changing an expected PPH needs the admin cookie', async () => {
+  const t = setup();
+  const res = await t.post('/api/admin/expected-pph', { rows: [{ group: 'North', sort: 'Twilight', expectedPph: 300 }] });
+  assert.equal(res.status, 401);
+  assert.equal(count(t, "SELECT count(*) AS n FROM settings WHERE key = 'expected_pph.Twilight.North'"), 0);
+});
+
+test('a new expected PPH re-scores that sort only, past nights included (D134)', async () => {
+  const t = setup();
+  const cookie = cookieOf(await t.post('/api/admin/sign-in', { code: CODE }));
+  // 5,500 pieces in 20 hours is 275 PPH: 100% of North's 275, and 91.67% of 300.
+  for (const sort of ['Afternoon', 'Twilight']) {
+    await t.post('/api/admin/night', { date: '2026-10-19', sort, rows: [{ lineId: 'PD1', hours: 20, volume: 5500 }] }, cookie);
+  }
+  const results = (sort: string) => `/results?sort=${sort}&period=all-time`;
+  const page = async (path: string) => (await t.get(path)).text();
+  for (const sort of ['afternoon', 'twilight']) {
+    assert.match(await page(results(sort)), /<span>100%<\/span>/);
+    assert.match(await page(`/line/pd1?sort=${sort}`), /expected 275 PPH/);
+  }
+
+  const saved = await t.post('/api/admin/expected-pph', { rows: [{ group: 'North', sort: 'Twilight', expectedPph: '300' }] }, cookie);
+  assert.equal(saved.status, 200);
+  assert.equal(saved.headers.get('cache-control'), 'no-store');
+  assert.deepEqual(await saved.json(), { ok: true, changed: 1, unchanged: 0 });
+
+  // Past the 20 seconds that viewers share a copy for.
+  t.setNow(later(21_000));
+  const twilight = await page(results('twilight'));
+  assert.match(twilight, /<span>92%<\/span>/);
+  assert.ok(!twilight.includes('<span>100%</span>'));
+  assert.match(await page('/line/pd1?sort=twilight'), /expected 300 PPH/);
+
+  assert.match(await page(results('afternoon')), /<span>100%<\/span>/);
+  assert.match(await page('/line/pd1?sort=afternoon'), /expected 275 PPH/);
+
+  // The live view of a finished sort follows too.
+  const ids = t.sqlite.prepare("SELECT id, sort FROM shift WHERE date = '2026-10-19'").all() as { id: number; sort: string }[];
+  const liveOf = (sort: string) => page(`/live/${ids.find((s) => s.sort === sort)!.id}`);
+  assert.match(await liveOf('Twilight'), /Expected 300/);
+  assert.match(await liveOf('Afternoon'), /Expected 275/);
+});
+
+test('a bad expected PPH is refused with a message, and odd requests save nothing', async () => {
+  const t = setup();
+  const cookie = cookieOf(await t.post('/api/admin/sign-in', { code: CODE }));
+  const bad = await t.post('/api/admin/expected-pph', { rows: [{ group: 'North', sort: 'Twilight', expectedPph: '2750000' }] }, cookie);
+  assert.equal(bad.status, 400);
+  assert.deepEqual(await bad.json(), { ok: false, errors: [{ lineId: null, message: 'Twilight North: expected PPH must be a whole number from 1 to 2000.' }] });
+
+  assert.equal((await t.post('/api/admin/expected-pph', {}, cookie)).status, 400);
+  assert.equal((await t.post('/api/admin/expected-pph', { rows: [null, 5, 'x'] }, cookie)).status, 400);
+  assert.equal((await t.post('/api/admin/expected-pph', { rows: [{ group: 'North', expectedPph: 300 }] }, cookie)).status, 400);
+  assert.equal((await t.post('/api/admin/expected-pph', { rows: [{ group: 'North', sort: 'Twilight', expectedPph: true }] }, cookie)).status, 400);
+  assert.equal(count(t, "SELECT count(*) AS n FROM audit_log WHERE action = 'expected PPH changed'"), 0);
+  assert.equal(count(t, "SELECT count(*) AS n FROM settings WHERE key LIKE 'expected_pph.%.%'"), 0);
+});

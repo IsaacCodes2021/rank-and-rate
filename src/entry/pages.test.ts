@@ -85,6 +85,43 @@ test('the saved numbers for a date and sort can be loaded back, admin only', asy
   assert.equal((await t.get('/api/admin/night', cookie)).status, 400);
 });
 
+test('the expected PPH screen is for the admin, shows every area and is reachable from the other screens', async () => {
+  const t = setup();
+  const out = await t.get('/admin/expected-pph');
+  assert.equal(out.status, 302);
+  assert.equal(out.headers.get('location'), '/admin');
+
+  const cookie = await t.signIn();
+  const res = await t.get('/admin/expected-pph', cookie);
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('cache-control'), 'no-store');
+  const page = await res.text();
+  const fields = (html: string) => [...html.matchAll(/data-group="([^"]+)" data-sort="([^"]+)" data-saved="(\d+)" value="(\d+)" inputmode="numeric"/g)].map((m) => m.slice(1).join(' '));
+  assert.deepEqual(fields(page), [
+    'Unload Afternoon 550 550',
+    'Unload Morning 550 550',
+    'Unload Twilight 550 550',
+    'North Afternoon 275 275',
+    'North Morning 275 275',
+    'North Twilight 275 275',
+    'Wings Afternoon 350 350',
+    'Wings Morning 350 350',
+    'Wings Twilight 350 350',
+  ]);
+  assert.match(page, /<th>Afternoon<\/th><th>Morning<\/th><th>Twilight<\/th>/);
+  assert.match(page, /PD1, PD2, PD3, PD4, PD5, PD14/);
+  assert.match(page, /past nights included/);
+  assert.equal((page.match(/enterkeyhint="done"/g) ?? []).length, 1); // only the very last number
+
+  for (const path of ['/admin', '/admin/supervisors']) {
+    assert.match(await (await t.get(path, cookie)).text(), /href="\/admin\/expected-pph"/);
+  }
+  await t.post('/api/admin/expected-pph', { rows: [{ group: 'North', sort: 'Twilight', expectedPph: 300 }] }, cookie);
+  const after = fields(await (await t.get('/admin/expected-pph', cookie)).text());
+  assert.ok(after.includes('North Twilight 300 300'));
+  assert.ok(after.includes('North Afternoon 275 275'));
+});
+
 test("the screen's date is the building's local date, across the end of daylight saving", () => {
   assert.equal(pacificDate(new Date('2026-10-30T06:30:00Z')), '2026-10-29'); // 11:30 PM PDT
   assert.equal(pacificDate(new Date('2026-10-30T07:30:00Z')), '2026-10-30'); // 12:30 AM PDT
